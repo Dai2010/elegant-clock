@@ -73,6 +73,12 @@
           "arch": [
             "x64"
           ]
+        },
+        {
+          "target": "pacman",
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "category": "Utility",
@@ -80,6 +86,10 @@
       "synopsis": "Transparent desktop clock",
       "description": "Elegant Clock provides a transparent desktop clock, date display, duration countdown, target-date countdown, and stopwatch.",
       "artifactName": "Elegant-Clock-${version}-Linux-${arch}.${ext}"
+    },
+    "pacman": {
+      "artifactName": "Elegant-Clock-${version}-Arch-${arch}.pkg.tar.zst",
+      "compression": "zst"
     }
   }
 }

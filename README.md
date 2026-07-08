@@ -27,7 +27,7 @@ npm run dist:linux
 
 Windows 目标产物：`.exe`、`.msi`。
 
-Linux 目标产物：`.deb`、`.rpm`。GitHub Actions 还会把 `.deb` 复制为 `.dpkg` 资产别名。
+Linux 目标产物：`.deb`、`.rpm`、`.pkg.tar.zst`。GitHub Actions 还会把 `.deb` 复制为 `.dpkg` 资产别名。
 
 ## 发布安装包
 

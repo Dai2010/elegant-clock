@@ -47,13 +47,17 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y rpm
+          sudo apt-get install -y rpm libarchive-tools zstd
 
       - name: Install dependencies
         run: npm ci
 
       - name: Build installers
         run: npm run ${{ matrix.script }}
+
+      - name: Build Arch Linux package
+        if: runner.os == 'Linux'
+        run: npm run package:arch
 
       - name: Add dpkg asset alias
         if: runner.os == 'Linux'
@@ -121,5 +125,5 @@ jobs:
             gh release create "$RELEASE_TAG" "${files[@]}" \
               --target "$GITHUB_SHA" \
               --title "Elegant Clock ${RELEASE_TAG}" \
-              --notes "Automated installer build for Elegant Clock. Assets include Windows .exe/.msi and Linux .deb/.dpkg/.rpm/.pkg.tar.xz packages."
+              --notes "Automated installer build for Elegant Clock. Assets include Windows .exe/.msi and Linux .deb/.dpkg/.rpm/.pkg.tar.zst packages."
           fi

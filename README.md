@@ -34,17 +34,6 @@ Linux 目标产物：`.deb`、`.rpm`、`.pkg.tar.zst`。GitHub Actions 还会把
 
 每个 Release 会额外上传 `SHA256SUMS.txt`，用于校验所有安装包资产。
 
-## 发布安装包
-
-推送版本标签即可触发 GitHub Actions 构建并上传 Release Assets：
-
-```bash
-git tag v0.2.0
-git push origin v0.2.0
-```
-
-也可以在 GitHub Actions 页面手动运行 `Release Installers`，输入目标标签。
-
 ## 规划
 
 详见 `docs/PLAN.md`。

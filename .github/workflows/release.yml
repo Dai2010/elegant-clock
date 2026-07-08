@@ -121,5 +121,5 @@ jobs:
             gh release create "$RELEASE_TAG" "${files[@]}" \
               --target "$GITHUB_SHA" \
               --title "Elegant Clock ${RELEASE_TAG}" \
-              --notes "Automated installer build for Elegant Clock. Assets include Windows .exe/.msi and Linux .deb/.dpkg/.rpm/.pkg.tar.zst packages."
+              --notes "Automated installer build for Elegant Clock. Assets include Windows .exe/.msi and Linux .deb/.dpkg/.rpm/.pkg.tar.xz packages."
           fi

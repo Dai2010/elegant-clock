@@ -88,8 +88,8 @@
       "artifactName": "Elegant-Clock-${version}-Linux-${arch}.${ext}"
     },
     "pacman": {
-      "artifactName": "Elegant-Clock-${version}-Arch-${arch}.pkg.tar.zst",
-      "compression": "zst"
+      "artifactName": "Elegant-Clock-${version}-Arch-${arch}.pkg.tar.xz",
+      "compression": "xz"
     }
   }
 }

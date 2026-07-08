@@ -1,0 +1,83 @@
+{
+  "name": "elegant-clock",
+  "version": "0.1.0",
+  "description": "A cross-platform transparent desktop clock with countdown, target-date timer, stopwatch, and date display.",
+  "main": "src/main.js",
+  "author": "Dai2010",
+  "license": "GPL-3.0-only",
+  "private": false,
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --publish never",
+    "dist:win": "electron-builder --win --x64 --publish never",
+    "dist:linux": "electron-builder --linux --x64 --publish never"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "electron": "^33.3.1",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "io.github.dai2010.elegantclock",
+    "productName": "Elegant Clock",
+    "copyright": "Copyright © 2026 Dai2010",
+    "asar": true,
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*",
+      "README.md",
+      "LICENSE",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "msi",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "Elegant-Clock-${version}-Windows-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Elegant Clock"
+    },
+    "linux": {
+      "target": [
+        {
+          "target": "deb",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "rpm",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "category": "Utility",
+      "maintainer": "Dai2010",
+      "synopsis": "Transparent desktop clock",
+      "description": "Elegant Clock provides a transparent desktop clock, date display, duration countdown, target-date countdown, and stopwatch.",
+      "artifactName": "Elegant-Clock-${version}-Linux-${arch}.${ext}"
+    }
+  }
+}

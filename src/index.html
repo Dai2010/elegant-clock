@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;" />
+    <title>Elegant Clock</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body class="transparent">
+    <main class="app-shell">
+      <header class="titlebar">
+        <div class="brand">
+          <span class="brand-mark">◷</span>
+          <span>Elegant Clock</span>
+        </div>
+        <div class="window-actions">
+          <button id="minimize-btn" type="button" title="最小化">—</button>
+          <button id="maximize-btn" type="button" title="最大化/还原">□</button>
+          <button id="close-btn" type="button" title="关闭">×</button>
+        </div>
+      </header>
+
+      <section class="clock-panel" aria-label="当前时间">
+        <p id="current-date" class="date-text">--</p>
+        <h1 id="current-time" class="time-text">--:--:--</h1>
+      </section>
+
+      <section class="settings-panel" aria-label="显示设置">
+        <label class="switch-row">
+          <input id="transparent-toggle" type="checkbox" />
+          <span>透明显示</span>
+        </label>
+        <label class="switch-row">
+          <input id="always-top-toggle" type="checkbox" />
+          <span>窗口置顶</span>
+        </label>
+      </section>
+
+      <section class="tool-card" aria-label="倒计时">
+        <div class="section-heading">
+          <h2>倒计时</h2>
+          <span id="countdown-status" class="status-text">待开始</span>
+        </div>
+
+        <div class="mode-row" role="radiogroup" aria-label="倒计时模式">
+          <label>
+            <input type="radio" name="countdown-mode" value="duration" checked />
+            时长
+          </label>
+          <label>
+            <input type="radio" name="countdown-mode" value="target" />
+            指定日期
+          </label>
+        </div>
+
+        <div id="duration-fields" class="input-grid three-cols">
+          <label>
+            小时
+            <input id="hours-input" type="number" min="0" max="999" step="1" value="0" />
+          </label>
+          <label>
+            分钟
+            <input id="minutes-input" type="number" min="0" max="59" step="1" value="5" />
+          </label>
+          <label>
+            秒
+            <input id="seconds-input" type="number" min="0" max="59" step="1" value="0" />
+          </label>
+        </div>
+
+        <div id="target-fields" class="input-grid" hidden>
+          <label>
+            目标日期时间
+            <input id="target-input" type="datetime-local" />
+          </label>
+        </div>
+
+        <output id="countdown-display" class="timer-display">00:05:00</output>
+        <div class="button-row">
+          <button id="countdown-start" type="button">开始</button>
+          <button id="countdown-pause" type="button">暂停</button>
+          <button id="countdown-reset" type="button">重置</button>
+        </div>
+      </section>
+
+      <section class="tool-card" aria-label="正计时">
+        <div class="section-heading">
+          <h2>正计时</h2>
+          <span id="stopwatch-status" class="status-text">待开始</span>
+        </div>
+        <output id="stopwatch-display" class="timer-display">00:00:00.0</output>
+        <div class="button-row">
+          <button id="stopwatch-start" type="button">开始</button>
+          <button id="stopwatch-pause" type="button">暂停</button>
+          <button id="stopwatch-reset" type="button">重置</button>
+        </div>
+      </section>
+
+      <footer class="footer-note">
+        <span>GPL-3.0-only</span>
+        <span id="version-label">v--</span>
+      </footer>
+    </main>
+
+    <script src="renderer.js"></script>
+  </body>
+</html>

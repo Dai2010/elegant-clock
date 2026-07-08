@@ -1,0 +1,120 @@
+name: Release Installers
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag, for example v0.1.0'
+        required: true
+        default: 'v0.1.0'
+
+permissions:
+  contents: write
+
+env:
+  CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+jobs:
+  build:
+    name: Build ${{ matrix.name }} installers
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows
+            os: windows-latest
+            script: dist:win
+            artifact: windows-installers
+          - name: Linux
+            os: ubuntu-latest
+            script: dist:linux
+            artifact: linux-installers
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Linux packaging tools
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rpm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build installers
+        run: npm run ${{ matrix.script }}
+
+      - name: Add dpkg asset alias
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          for deb in dist/*.deb; do
+            [ -e "$deb" ] || continue
+            cp "$deb" "${deb%.deb}.dpkg"
+          done
+
+      - name: Upload installer artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          if-no-files-found: error
+          path: |
+            dist/*.exe
+            dist/*.msi
+            dist/*.deb
+            dist/*.dpkg
+            dist/*.rpm
+
+  release:
+    name: Upload release assets
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download installer artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+
+      - name: Resolve release tag
+        id: release-meta
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create or update GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release-meta.outputs.tag }}
+        run: |
+          mapfile -d '' files < <(find release-assets -type f \( -name '*.exe' -o -name '*.msi' -o -name '*.deb' -o -name '*.dpkg' -o -name '*.rpm' \) -print0 | sort -z)
+
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "No installer assets were found." >&2
+            exit 1
+          fi
+
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "${files[@]}" --clobber
+          else
+            gh release create "$RELEASE_TAG" "${files[@]}" \
+              --target "$GITHUB_SHA" \
+              --title "Elegant Clock ${RELEASE_TAG}" \
+              --notes "Automated installer build for Elegant Clock. Assets include Windows .exe/.msi and Linux .deb/.dpkg/.rpm packages."
+          fi

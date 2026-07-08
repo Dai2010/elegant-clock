@@ -112,12 +112,21 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ steps.release-meta.outputs.tag }}
         run: |
-          mapfile -d '' files < <(find release-assets -type f \( -name '*.exe' -o -name '*.msi' -o -name '*.deb' -o -name '*.dpkg' -o -name '*.rpm' -o -name '*.pacman' -o -name '*.pkg.tar.*' \) -print0 | sort -z)
+          mkdir -p release-upload
+          find release-assets -type f \( -name '*.exe' -o -name '*.msi' -o -name '*.deb' -o -name '*.dpkg' -o -name '*.rpm' -o -name '*.pacman' -o -name '*.pkg.tar.*' \) -print0 \
+            | while IFS= read -r -d '' file; do
+                cp "$file" "release-upload/$(basename "$file")"
+              done
 
-          if [ "${#files[@]}" -eq 0 ]; then
+          mapfile -d '' installers < <(find release-upload -type f -print0 | sort -z)
+
+          if [ "${#installers[@]}" -eq 0 ]; then
             echo "No installer assets were found." >&2
             exit 1
           fi
+
+          (cd release-upload && sha256sum * | sort -k 2 > SHA256SUMS.txt)
+          mapfile -d '' files < <(find release-upload -type f -print0 | sort -z)
 
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release upload "$RELEASE_TAG" "${files[@]}" --clobber
@@ -125,5 +134,5 @@ jobs:
             gh release create "$RELEASE_TAG" "${files[@]}" \
               --target "$GITHUB_SHA" \
               --title "Elegant Clock ${RELEASE_TAG}" \
-              --notes "Automated installer build for Elegant Clock. Assets include Windows .exe/.msi and Linux .deb/.dpkg/.rpm/.pkg.tar.zst packages."
+              --notes "Automated installer build for Elegant Clock. Assets include Windows .exe/.msi, Linux .deb/.dpkg/.rpm/.pkg.tar.zst packages, and SHA256SUMS.txt checksums."
           fi

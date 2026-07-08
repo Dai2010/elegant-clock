@@ -1,7 +1,9 @@
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, Notification } = require('electron');
 const path = require('path');
 
 let mainWindow;
+
+app.setAppUserModelId('io.github.dai2010.elegantclock');
 
 function getWindowFromEvent(event) {
   return BrowserWindow.fromWebContents(event.sender);
@@ -9,10 +11,10 @@ function getWindowFromEvent(event) {
 
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 520,
-    height: 620,
+    width: 560,
+    height: 820,
     minWidth: 420,
-    minHeight: 520,
+    minHeight: 620,
     title: 'Elegant Clock',
     frame: false,
     transparent: true,
@@ -51,6 +53,36 @@ app.on('window-all-closed', () => {
 });
 
 ipcMain.handle('app:get-version', () => app.getVersion());
+
+ipcMain.handle('notification:show', (event, options = {}) => {
+  const window = getWindowFromEvent(event);
+  const title = String(options.title || 'Elegant Clock');
+  const body = String(options.body || '提醒时间到了');
+
+  if (Notification.isSupported()) {
+    const notification = new Notification({
+      title,
+      body,
+      silent: false
+    });
+
+    notification.on('click', () => {
+      window?.show();
+      window?.focus();
+    });
+
+    notification.show();
+  } else {
+    window?.flashFrame(true);
+  }
+
+  if (options.focus) {
+    window?.show();
+    window?.focus();
+  }
+
+  return true;
+});
 
 ipcMain.on('window:minimize', (event) => {
   getWindowFromEvent(event)?.minimize();

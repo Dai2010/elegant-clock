@@ -1,7 +1,7 @@
 {
   "name": "elegant-clock",
-  "version": "0.1.0",
-  "description": "A cross-platform transparent desktop clock with countdown, target-date timer, stopwatch, and date display.",
+  "version": "0.2.0",
+  "description": "A cross-platform transparent desktop clock with countdown, target-date timer, stopwatch, pomodoro, reminders, and date display.",
   "main": "src/main.js",
   "author": "Dai2010",
   "license": "GPL-3.0-only",
@@ -79,7 +79,7 @@
       "category": "Utility",
       "maintainer": "Dai2010",
       "synopsis": "Transparent desktop clock",
-      "description": "Elegant Clock provides a transparent desktop clock, date display, duration countdown, target-date countdown, and stopwatch.",
+      "description": "Elegant Clock provides a transparent desktop clock, date display, duration countdown, target-date countdown, stopwatch, pomodoro, and reminders.",
       "artifactName": "Elegant-Clock-${version}-Linux-${arch}.${ext}"
     }
   }

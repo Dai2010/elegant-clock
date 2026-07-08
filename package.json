@@ -60,6 +60,7 @@
       "shortcutName": "Elegant Clock"
     },
     "linux": {
+      "icon": "build/icons",
       "target": [
         {
           "target": "deb",

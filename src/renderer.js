@@ -147,11 +147,11 @@ function hexToRgbParts(hex) {
 }
 
 function createDefaultRingtone() {
-  const fallbackUrl = new URL('./assets/audio/热风.mp3', window.location.href).toString();
+  const fallbackUrl = new URL('./assets/audio/ringtone_default.mp3', window.location.href).toString();
 
   return {
     type: 'bundled',
-    name: '热风.mp3',
+    name: 'ringtone_default.mp3',
     url: fallbackUrl,
     path: ''
   };
@@ -159,7 +159,7 @@ function createDefaultRingtone() {
 
 function normalizeRingtone(ringtone) {
   if (!ringtone || ringtone.type === 'bundled') {
-    return { ...createDefaultRingtone(), ...defaultRingtone, type: 'bundled', name: '热风.mp3' };
+    return { ...createDefaultRingtone(), ...defaultRingtone, type: 'bundled', name: 'ringtone_default.mp3' };
   }
 
   if (ringtone.type === 'custom' && typeof ringtone.url === 'string' && ringtone.url.length > 0) {
@@ -171,7 +171,7 @@ function normalizeRingtone(ringtone) {
     };
   }
 
-  return { ...createDefaultRingtone(), ...defaultRingtone, type: 'bundled', name: '热风.mp3' };
+  return { ...createDefaultRingtone(), ...defaultRingtone, type: 'bundled', name: 'ringtone_default.mp3' };
 }
 
 function formatDuration(milliseconds, withTenths = false) {
@@ -262,7 +262,7 @@ function applySettings() {
   elements.backgroundColorInput.value = settings.backgroundColor;
   elements.ringtoneLabel.textContent = settings.ringtone.type === 'custom'
     ? `自定义：${settings.ringtone.name}`
-    : '默认：热风.mp3';
+    : '默认：ringtone_default.mp3';
   elements.appearanceStatus.textContent = `${settings.transparent ? settings.opacity : 100}% · ${settings.fontSize}px`;
   shell?.setAlwaysOnTop(settings.alwaysOnTop);
 }
@@ -300,7 +300,7 @@ async function initDefaultRingtone() {
     if (ringtone?.url) {
       defaultRingtone = {
         type: 'bundled',
-        name: ringtone.name || '热风.mp3',
+        name: ringtone.name || 'ringtone_default.mp3',
         url: ringtone.url,
         path: ringtone.path || ''
       };
@@ -331,7 +331,7 @@ async function chooseRingtone() {
 }
 
 function useDefaultRingtone() {
-  settings.ringtone = { ...createDefaultRingtone(), ...defaultRingtone, type: 'bundled', name: '热风.mp3' };
+  settings.ringtone = { ...createDefaultRingtone(), ...defaultRingtone, type: 'bundled', name: 'ringtone_default.mp3' };
   saveSettings();
   applySettings();
 }

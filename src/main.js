@@ -12,10 +12,10 @@ function getWindowFromEvent(event) {
 
 function getDefaultRingtonePath() {
   if (app.isPackaged) {
-    return path.join(process.resourcesPath, 'assets', 'audio', '热风.mp3');
+    return path.join(process.resourcesPath, 'assets', 'audio', 'ringtone_default.mp3');
   }
 
-  return path.join(__dirname, 'assets', 'audio', '热风.mp3');
+  return path.join(__dirname, 'assets', 'audio', 'ringtone_default.mp3');
 }
 
 function createRingtonePayload(filePath) {

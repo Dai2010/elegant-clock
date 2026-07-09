@@ -5,8 +5,20 @@ const reminderStorageKey = 'elegant-clock-reminders';
 const elements = {
   currentDate: document.querySelector('#current-date'),
   currentTime: document.querySelector('#current-time'),
+  appearanceStatus: document.querySelector('#appearance-status'),
   transparentToggle: document.querySelector('#transparent-toggle'),
   alwaysTopToggle: document.querySelector('#always-top-toggle'),
+  opacityInput: document.querySelector('#opacity-input'),
+  opacityValue: document.querySelector('#opacity-value'),
+  fontFamilyInput: document.querySelector('#font-family-input'),
+  fontSizeInput: document.querySelector('#font-size-input'),
+  fontSizeValue: document.querySelector('#font-size-value'),
+  fontColorInput: document.querySelector('#font-color-input'),
+  backgroundColorInput: document.querySelector('#background-color-input'),
+  ringtoneLabel: document.querySelector('#ringtone-label'),
+  ringtoneChoose: document.querySelector('#ringtone-choose'),
+  ringtoneTest: document.querySelector('#ringtone-test'),
+  ringtoneDefault: document.querySelector('#ringtone-default'),
   minimizeBtn: document.querySelector('#minimize-btn'),
   maximizeBtn: document.querySelector('#maximize-btn'),
   closeBtn: document.querySelector('#close-btn'),
@@ -51,6 +63,12 @@ const elements = {
 const settings = {
   transparent: true,
   alwaysOnTop: false,
+  opacity: 78,
+  fontFamily: '',
+  fontSize: 82,
+  fontColor: '#f8fbff',
+  backgroundColor: '#101623',
+  ringtone: null,
   pomodoro: {
     focusMinutes: 25,
     shortBreakMinutes: 5,
@@ -83,6 +101,7 @@ const stopwatch = {
 
 let reminders = [];
 let audioContext;
+let defaultRingtone;
 
 const dateFormatter = new Intl.DateTimeFormat(undefined, {
   weekday: 'long',
@@ -112,6 +131,47 @@ function clampNumber(value, min, max) {
   }
 
   return Math.min(max, Math.max(min, Math.trunc(parsed)));
+}
+
+function normalizeColor(value, fallback) {
+  return typeof value === 'string' && /^#[\da-f]{6}$/i.test(value) ? value : fallback;
+}
+
+function hexToRgbParts(hex) {
+  const normalized = normalizeColor(hex, '#101623').slice(1);
+  const red = Number.parseInt(normalized.slice(0, 2), 16);
+  const green = Number.parseInt(normalized.slice(2, 4), 16);
+  const blue = Number.parseInt(normalized.slice(4, 6), 16);
+
+  return `${red}, ${green}, ${blue}`;
+}
+
+function createDefaultRingtone() {
+  const fallbackUrl = new URL('./assets/audio/热风.mp3', window.location.href).toString();
+
+  return {
+    type: 'bundled',
+    name: '热风.mp3',
+    url: fallbackUrl,
+    path: ''
+  };
+}
+
+function normalizeRingtone(ringtone) {
+  if (!ringtone || ringtone.type === 'bundled') {
+    return { ...createDefaultRingtone(), ...defaultRingtone, type: 'bundled', name: '热风.mp3' };
+  }
+
+  if (ringtone.type === 'custom' && typeof ringtone.url === 'string' && ringtone.url.length > 0) {
+    return {
+      type: 'custom',
+      name: ringtone.name || '自定义铃声',
+      url: ringtone.url,
+      path: ringtone.path || ''
+    };
+  }
+
+  return { ...createDefaultRingtone(), ...defaultRingtone, type: 'bundled', name: '热风.mp3' };
 }
 
 function formatDuration(milliseconds, withTenths = false) {
@@ -150,6 +210,12 @@ function toLocalDateTimeValue(date) {
 function normalizeSettings() {
   settings.transparent = settings.transparent !== false;
   settings.alwaysOnTop = Boolean(settings.alwaysOnTop);
+  settings.opacity = clampNumber(settings.opacity, 20, 100);
+  settings.fontFamily = typeof settings.fontFamily === 'string' ? settings.fontFamily.trim() : '';
+  settings.fontSize = clampNumber(settings.fontSize, 48, 160);
+  settings.fontColor = normalizeColor(settings.fontColor, '#f8fbff');
+  settings.backgroundColor = normalizeColor(settings.backgroundColor, '#101623');
+  settings.ringtone = normalizeRingtone(settings.ringtone);
   settings.pomodoro = {
     focusMinutes: clampNumber(settings.pomodoro?.focusMinutes, 1, 180),
     shortBreakMinutes: clampNumber(settings.pomodoro?.shortBreakMinutes, 1, 60),
@@ -174,11 +240,38 @@ function saveSettings() {
 }
 
 function applySettings() {
+  const rootStyle = document.documentElement.style;
+
   document.body.classList.toggle('transparent', settings.transparent);
   document.body.classList.toggle('opaque', !settings.transparent);
+  rootStyle.setProperty('--panel-alpha', String(settings.transparent ? settings.opacity / 100 : 1));
+  rootStyle.setProperty('--clock-font-family', settings.fontFamily || 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif');
+  rootStyle.setProperty('--clock-font-size', `${settings.fontSize}px`);
+  rootStyle.setProperty('--text', settings.fontColor);
+  rootStyle.setProperty('--background-color', settings.backgroundColor);
+  rootStyle.setProperty('--panel-rgb', hexToRgbParts(settings.backgroundColor));
+
   elements.transparentToggle.checked = settings.transparent;
   elements.alwaysTopToggle.checked = settings.alwaysOnTop;
+  elements.opacityInput.value = String(settings.opacity);
+  elements.opacityValue.textContent = `${settings.opacity}%`;
+  elements.fontFamilyInput.value = settings.fontFamily;
+  elements.fontSizeInput.value = String(settings.fontSize);
+  elements.fontSizeValue.textContent = `${settings.fontSize}px`;
+  elements.fontColorInput.value = settings.fontColor;
+  elements.backgroundColorInput.value = settings.backgroundColor;
+  elements.ringtoneLabel.textContent = settings.ringtone.type === 'custom'
+    ? `自定义：${settings.ringtone.name}`
+    : '默认：热风.mp3';
+  elements.appearanceStatus.textContent = `${settings.transparent ? settings.opacity : 100}% · ${settings.fontSize}px`;
   shell?.setAlwaysOnTop(settings.alwaysOnTop);
+}
+
+function updateAppearanceSetting(key, value) {
+  settings[key] = value;
+  normalizeSettings();
+  saveSettings();
+  applySettings();
 }
 
 function syncPomodoroInputs() {
@@ -199,6 +292,48 @@ function readPomodoroConfig() {
   syncPomodoroInputs();
   saveSettings();
   return settings.pomodoro;
+}
+
+async function initDefaultRingtone() {
+  try {
+    const ringtone = await shell?.getDefaultRingtone?.();
+    if (ringtone?.url) {
+      defaultRingtone = {
+        type: 'bundled',
+        name: ringtone.name || '热风.mp3',
+        url: ringtone.url,
+        path: ringtone.path || ''
+      };
+    }
+  } catch {
+    defaultRingtone = undefined;
+  }
+
+  settings.ringtone = normalizeRingtone(settings.ringtone);
+  saveSettings();
+  applySettings();
+}
+
+async function chooseRingtone() {
+  const ringtone = await shell?.chooseRingtone?.();
+  if (!ringtone?.url) {
+    return;
+  }
+
+  settings.ringtone = {
+    type: 'custom',
+    name: ringtone.name || '自定义铃声',
+    url: ringtone.url,
+    path: ringtone.path || ''
+  };
+  saveSettings();
+  applySettings();
+}
+
+function useDefaultRingtone() {
+  settings.ringtone = { ...createDefaultRingtone(), ...defaultRingtone, type: 'bundled', name: '热风.mp3' };
+  saveSettings();
+  applySettings();
 }
 
 function getPomodoroPhaseLabel(phase = pomodoro.phase) {
@@ -230,7 +365,7 @@ function setPomodoroStatus(message) {
   elements.pomodoroStatus.textContent = message;
 }
 
-function playAlertTone() {
+function playFallbackTone() {
   const AudioContextConstructor = window.AudioContext || window.webkitAudioContext;
   if (!AudioContextConstructor) {
     return;
@@ -254,6 +389,19 @@ function playAlertTone() {
   } catch {
     audioContext = undefined;
   }
+}
+
+function playAlertTone() {
+  const ringtone = normalizeRingtone(settings.ringtone);
+  const audio = new Audio(ringtone.url);
+  audio.volume = 0.85;
+
+  const playPromise = audio.play();
+  if (playPromise?.catch) {
+    playPromise.catch(() => playFallbackTone());
+  }
+
+  return audio;
 }
 
 function showAlert(title, body, focus = false) {
@@ -391,6 +539,7 @@ function updateCountdownDisplay() {
       countdown.running = false;
       countdown.finished = true;
       setCountdownStatus('已完成');
+      showAlert('倒计时', '倒计时已结束。', true);
     } else {
       setCountdownStatus('进行中');
     }
@@ -671,6 +820,19 @@ function bindEvents() {
     applySettings();
   });
 
+  elements.opacityInput.addEventListener('input', () => updateAppearanceSetting('opacity', elements.opacityInput.value));
+  elements.fontFamilyInput.addEventListener('change', () => updateAppearanceSetting('fontFamily', elements.fontFamilyInput.value));
+  elements.fontSizeInput.addEventListener('input', () => updateAppearanceSetting('fontSize', elements.fontSizeInput.value));
+  elements.fontColorInput.addEventListener('input', () => updateAppearanceSetting('fontColor', elements.fontColorInput.value));
+  elements.backgroundColorInput.addEventListener('input', () => updateAppearanceSetting('backgroundColor', elements.backgroundColorInput.value));
+  elements.ringtoneChoose.addEventListener('click', () => {
+    chooseRingtone().catch(() => {
+      elements.ringtoneLabel.textContent = '选择铃声失败';
+    });
+  });
+  elements.ringtoneTest.addEventListener('click', playAlertTone);
+  elements.ringtoneDefault.addEventListener('click', useDefaultRingtone);
+
   elements.minimizeBtn.addEventListener('click', () => shell?.minimize());
   elements.maximizeBtn.addEventListener('click', () => shell?.toggleMaximize());
   elements.closeBtn.addEventListener('click', () => shell?.close());
@@ -743,6 +905,7 @@ function init() {
   setDefaultReminderTime();
   bindEvents();
   applySettings();
+  initDefaultRingtone();
   resetPomodoro();
   resetCountdown();
   resetStopwatch();

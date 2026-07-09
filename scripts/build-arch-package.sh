@@ -36,7 +36,7 @@ cp "$ROOT_DIR/build/icons/512x512.png" "$PACKAGE_ROOT/usr/share/icons/hicolor/51
 cat > "$PACKAGE_ROOT/usr/share/applications/elegant-clock.desktop" <<'EOF'
 [Desktop Entry]
 Name=Elegant Clock
-Comment=Transparent desktop clock with countdown and stopwatch
+Comment=Customizable desktop clock with countdown, stopwatch, pomodoro, and reminders
 Exec=/opt/elegant-clock/elegant-clock %U
 Terminal=false
 Type=Application
@@ -52,7 +52,7 @@ cat > "$PACKAGE_ROOT/.PKGINFO" <<EOF
 pkgname = elegant-clock
 pkgbase = elegant-clock
 pkgver = ${VERSION}
-pkgdesc = Transparent desktop clock with countdown and stopwatch
+pkgdesc = Customizable desktop clock with countdown, stopwatch, pomodoro, and reminders
 url = https://github.com/Dai2010/elegant-clock
 builddate = ${BUILD_DATE}
 packager = Dai2010

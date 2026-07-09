@@ -1,7 +1,7 @@
 {
   "name": "elegant-clock",
-  "version": "0.2.0",
-  "description": "A cross-platform transparent desktop clock with countdown, target-date timer, stopwatch, pomodoro, reminders, and date display.",
+  "version": "0.3.0",
+  "description": "A cross-platform customizable desktop clock with countdown, target-date timer, stopwatch, pomodoro, reminders, and date display.",
   "main": "src/main.js",
   "author": "Dai2010",
   "license": "GPL-3.0-only",
@@ -33,6 +33,15 @@
       "README.md",
       "LICENSE",
       "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "src/assets/audio",
+        "to": "assets/audio",
+        "filter": [
+          "**/*"
+        ]
+      }
     ],
     "win": {
       "icon": "build/icon.ico",
@@ -79,7 +88,7 @@
       "category": "Utility",
       "maintainer": "Dai2010",
       "synopsis": "Transparent desktop clock",
-      "description": "Elegant Clock provides a transparent desktop clock, date display, duration countdown, target-date countdown, stopwatch, pomodoro, and reminders.",
+      "description": "Elegant Clock provides a customizable desktop clock, date display, duration countdown, target-date countdown, stopwatch, pomodoro, reminders, and selectable alarm sounds.",
       "artifactName": "Elegant-Clock-${version}-Linux-${arch}.${ext}"
     }
   }

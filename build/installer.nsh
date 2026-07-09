@@ -1,7 +1,7 @@
-!macro customHeader
-  !include LogicLib.nsh
-  !include nsDialogs.nsh
+!include LogicLib.nsh
+!include nsDialogs.nsh
 
+!macro customHeader
   Var AutoStartCheckbox
   Var AutoStartEnabled
 !macroend

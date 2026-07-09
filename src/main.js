@@ -1,10 +1,12 @@
-const { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, Notification, screen, Tray } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, Notification, screen, shell: electronShell, Tray } = require('electron');
 const { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } = require('fs');
 const os = require('os');
 const path = require('path');
 const { pathToFileURL } = require('url');
+const packageInfo = require('../package.json');
 
 let mainWindow;
+let aboutWindow;
 let tray;
 let isQuitting = false;
 let compactMode = false;
@@ -24,6 +26,8 @@ const compactWindowState = {
 
 const appId = 'io.github.dai2010.elegantclock';
 const appDisplayName = 'Elegant Clock';
+const githubProfileUrl = 'https://github.com/Dai2010';
+const projectHomepageUrl = 'https://github.com/Dai2010/elegant-clock';
 const autostartDesktopFileName = 'elegant-clock.desktop';
 const windowsRunEntryName = 'Elegant Clock';
 const autostartArgs = ['--autostart'];
@@ -47,6 +51,7 @@ const platformWindowConfig = {
 };
 
 app.setAppUserModelId(appId);
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
 
 function getWindowFromEvent(event) {
   return BrowserWindow.fromWebContents(event.sender);
@@ -209,6 +214,35 @@ function getIconPath() {
   return path.join(__dirname, '..', 'build', 'icons', '512x512.png');
 }
 
+function getAboutInfo() {
+  return {
+    name: appDisplayName,
+    version: app.getVersion(),
+    author: packageInfo.author || 'Dai2010',
+    githubProfileUrl,
+    projectHomepageUrl,
+    license: packageInfo.license || 'GPL-3.0-only'
+  };
+}
+
+function openExternalUrl(value) {
+  const url = new URL(String(value));
+
+  if (!['https:', 'http:'].includes(url.protocol)) {
+    throw new Error('Only HTTP(S) links can be opened externally');
+  }
+
+  return electronShell.openExternal(url.toString());
+}
+
+function openExternalUrlSafely(value) {
+  try {
+    return openExternalUrl(value).catch(() => false);
+  } catch {
+    return Promise.resolve(false);
+  }
+}
+
 function getTrayIcon() {
   const icon = nativeImage.createFromPath(getIconPath());
   const { trayIconSize } = getPlatformWindowConfig();
@@ -258,9 +292,45 @@ function requestFullUi(window = mainWindow) {
     setWindowCompactMode(window, false);
   }
 
+  if (window.isMinimized()) {
+    window.restore();
+  }
+
   window.show();
   window.focus();
   window.webContents.send('window:restore-full-ui');
+}
+
+function requestOrCreateFullUi() {
+  if (!app.isReady()) {
+    app.whenReady().then(() => requestOrCreateFullUi());
+    return;
+  }
+
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    createWindow();
+    return;
+  }
+
+  requestFullUi();
+}
+
+function hideWindowToTray(window = mainWindow) {
+  if (!window || window.isDestroyed()) {
+    return false;
+  }
+
+  if (compactMode) {
+    setWindowCompactMode(window, false);
+  }
+
+  if (!tray) {
+    window.minimize();
+    return true;
+  }
+
+  window.hide();
+  return true;
 }
 
 function applyPlatformCompactMode(window, enabled) {
@@ -354,7 +424,7 @@ function updateTrayMenu() {
     },
     {
       label: '隐藏到状态栏',
-      click: () => mainWindow?.hide()
+      click: () => hideWindowToTray()
     },
     {
       label: '开机自启动',
@@ -452,32 +522,102 @@ function createWindow() {
     event.preventDefault();
     mainWindow.hide();
   });
+  mainWindow.on('closed', () => {
+    mainWindow = null;
+  });
 
   mainWindow.loadFile(path.join(__dirname, 'index.html'));
 }
 
-app.whenReady().then(() => {
-  createWindow();
-  createTray();
+function createAboutWindow() {
+  if (aboutWindow && !aboutWindow.isDestroyed()) {
+    aboutWindow.show();
+    aboutWindow.focus();
+    return;
+  }
 
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow();
+  const aboutFilePath = path.join(__dirname, 'about.html');
+  const aboutFileUrl = pathToFileURL(aboutFilePath).toString();
+
+  aboutWindow = new BrowserWindow({
+    width: 500,
+    height: 430,
+    minWidth: 420,
+    minHeight: 360,
+    title: '关于 Elegant Clock',
+    parent: mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined,
+    modal: false,
+    frame: true,
+    backgroundColor: '#101623',
+    icon: getIconPath(),
+    show: false,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true
     }
   });
-});
+
+  aboutWindow.setMenuBarVisibility(false);
+  aboutWindow.once('ready-to-show', () => {
+    aboutWindow?.show();
+  });
+  aboutWindow.on('closed', () => {
+    aboutWindow = null;
+  });
+  aboutWindow.webContents.setWindowOpenHandler(({ url }) => {
+    openExternalUrlSafely(url);
+    return { action: 'deny' };
+  });
+  aboutWindow.webContents.on('will-navigate', (event, url) => {
+    if (url === aboutFileUrl) {
+      return;
+    }
+
+    event.preventDefault();
+    openExternalUrlSafely(url);
+  });
+  aboutWindow.loadFile(aboutFilePath);
+}
+
+if (!gotSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    requestOrCreateFullUi();
+  });
+
+  app.whenReady().then(() => {
+    createWindow();
+    createTray();
+
+    app.on('activate', () => {
+      requestOrCreateFullUi();
+    });
+  });
+}
 
 app.on('before-quit', () => {
   isQuitting = true;
 });
 
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin' && isQuitting) {
+  if (process.platform !== 'darwin' && (isQuitting || !tray)) {
     app.quit();
   }
 });
 
 ipcMain.handle('app:get-version', () => app.getVersion());
+
+ipcMain.handle('app:get-about-info', () => getAboutInfo());
+
+ipcMain.handle('app:open-about', () => {
+  createAboutWindow();
+  return true;
+});
+
+ipcMain.handle('app:open-external', (_event, url) => openExternalUrl(url));
 
 ipcMain.handle('app:get-default-ringtone', () => createRingtonePayload(getDefaultRingtonePath()));
 
@@ -540,6 +680,10 @@ ipcMain.handle('notification:show', (event, options = {}) => {
 
 ipcMain.on('window:minimize', (event) => {
   getWindowFromEvent(event)?.minimize();
+});
+
+ipcMain.on('window:hide-to-tray', (event) => {
+  hideWindowToTray(getWindowFromEvent(event));
 });
 
 ipcMain.on('window:toggle-maximize', (event) => {

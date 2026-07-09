@@ -2,11 +2,15 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('elegantClock', {
   getVersion: () => ipcRenderer.invoke('app:get-version'),
+  getAboutInfo: () => ipcRenderer.invoke('app:get-about-info'),
+  openAbout: () => ipcRenderer.invoke('app:open-about'),
+  openExternal: (url) => ipcRenderer.invoke('app:open-external', String(url)),
   getDefaultRingtone: () => ipcRenderer.invoke('app:get-default-ringtone'),
   getAutostart: () => ipcRenderer.invoke('app:get-autostart'),
   setAutostart: (enabled) => ipcRenderer.invoke('app:set-autostart', Boolean(enabled)),
   chooseRingtone: () => ipcRenderer.invoke('ringtone:choose'),
   minimize: () => ipcRenderer.send('window:minimize'),
+  hideToTray: () => ipcRenderer.send('window:hide-to-tray'),
   toggleMaximize: () => ipcRenderer.send('window:toggle-maximize'),
   close: () => ipcRenderer.send('window:close'),
   setAlwaysOnTop: (enabled) => ipcRenderer.send('window:set-always-on-top', Boolean(enabled)),

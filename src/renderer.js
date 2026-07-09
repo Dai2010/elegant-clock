@@ -27,6 +27,8 @@ const elements = {
   ringtoneChoose: document.querySelector('#ringtone-choose'),
   ringtoneTest: document.querySelector('#ringtone-test'),
   ringtoneDefault: document.querySelector('#ringtone-default'),
+  aboutOpen: document.querySelector('#about-open'),
+  hideBtn: document.querySelector('#hide-btn'),
   minimizeBtn: document.querySelector('#minimize-btn'),
   maximizeBtn: document.querySelector('#maximize-btn'),
   closeBtn: document.querySelector('#close-btn'),
@@ -1057,6 +1059,9 @@ function bindEvents() {
   });
   elements.ringtoneTest.addEventListener('click', playAlertTone);
   elements.ringtoneDefault.addEventListener('click', useDefaultRingtone);
+  elements.aboutOpen.addEventListener('click', () => {
+    shell?.openAbout?.()?.catch?.(() => {});
+  });
 
   elements.settingsToggle.addEventListener('click', () => openPanel('settings'));
   elements.toolsToggle.addEventListener('click', () => openPanel('tools'));
@@ -1064,6 +1069,7 @@ function bindEvents() {
     updatePanelToggles(elements.controlsDrawer.dataset.panel || 'tools');
   });
 
+  elements.hideBtn.addEventListener('click', () => shell?.hideToTray());
   elements.minimizeBtn.addEventListener('click', () => shell?.minimize());
   elements.maximizeBtn.addEventListener('click', () => shell?.toggleMaximize());
   elements.closeBtn.addEventListener('click', () => shell?.close());

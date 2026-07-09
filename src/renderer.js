@@ -3,11 +3,19 @@ const storageKey = 'elegant-clock-settings';
 const reminderStorageKey = 'elegant-clock-reminders';
 
 const elements = {
+  appShell: document.querySelector('#app-shell'),
+  clockPanel: document.querySelector('#clock-panel'),
   currentDate: document.querySelector('#current-date'),
   currentTime: document.querySelector('#current-time'),
+  controlsDrawer: document.querySelector('#controls-drawer'),
+  appearanceCard: document.querySelector('#appearance-card'),
+  settingsToggle: document.querySelector('#settings-toggle'),
+  toolsToggle: document.querySelector('#tools-toggle'),
   appearanceStatus: document.querySelector('#appearance-status'),
   transparentToggle: document.querySelector('#transparent-toggle'),
   alwaysTopToggle: document.querySelector('#always-top-toggle'),
+  autostartToggle: document.querySelector('#autostart-toggle'),
+  autostartStatus: document.querySelector('#autostart-status'),
   opacityInput: document.querySelector('#opacity-input'),
   opacityValue: document.querySelector('#opacity-value'),
   fontFamilyInput: document.querySelector('#font-family-input'),
@@ -102,6 +110,20 @@ const stopwatch = {
 let reminders = [];
 let audioContext;
 let defaultRingtone;
+let idleTimer;
+
+const idleDelayMs = 5000;
+const compactClickMaxMove = 5;
+
+const compactUi = {
+  active: false,
+  pointerId: null,
+  startX: 0,
+  startY: 0,
+  lastX: 0,
+  lastY: 0,
+  moved: false
+};
 
 const dateFormatter = new Intl.DateTimeFormat(undefined, {
   weekday: 'long',
@@ -272,6 +294,205 @@ function updateAppearanceSetting(key, value) {
   normalizeSettings();
   saveSettings();
   applySettings();
+}
+
+function renderAutostartInfo(info) {
+  const supported = Boolean(info?.supported);
+  const enabled = Boolean(info?.enabled);
+  const method = info?.method || '未知方式';
+  const detail = info?.detail || '';
+
+  elements.autostartToggle.disabled = !supported;
+  elements.autostartToggle.checked = enabled;
+  elements.autostartStatus.textContent = supported
+    ? `${enabled ? '已启用' : '未启用'} · ${method}${detail ? ` · ${detail}` : ''}`
+    : detail || '当前平台暂不支持开机自启动';
+}
+
+async function refreshAutostartInfo() {
+  try {
+    renderAutostartInfo(await shell?.getAutostart?.());
+  } catch {
+    elements.autostartToggle.disabled = true;
+    elements.autostartStatus.textContent = '读取开机自启动状态失败';
+  }
+}
+
+async function updateAutostartSetting(enabled) {
+  elements.autostartToggle.disabled = true;
+  elements.autostartStatus.textContent = enabled ? '正在启用开机自启动…' : '正在关闭开机自启动…';
+
+  try {
+    renderAutostartInfo(await shell?.setAutostart?.(enabled));
+  } catch {
+    await refreshAutostartInfo();
+    elements.autostartStatus.textContent = '更新开机自启动失败，请检查系统权限或桌面环境设置';
+  }
+}
+
+function updatePanelToggles(activePanel) {
+  const settingsOpen = elements.controlsDrawer.open && activePanel === 'settings';
+  const toolsOpen = elements.controlsDrawer.open && activePanel === 'tools';
+
+  elements.controlsDrawer.dataset.panel = activePanel;
+  elements.settingsToggle.setAttribute('aria-expanded', String(settingsOpen));
+  elements.toolsToggle.setAttribute('aria-expanded', String(toolsOpen));
+  elements.settingsToggle.classList.toggle('active', settingsOpen);
+  elements.toolsToggle.classList.toggle('active', toolsOpen);
+}
+
+function openPanel(panelName) {
+  exitCompactMode();
+
+  const nextPanel = panelName === 'settings' ? 'settings' : 'tools';
+  const isSameOpenPanel = elements.controlsDrawer.open && elements.controlsDrawer.dataset.panel === nextPanel;
+
+  elements.controlsDrawer.open = !isSameOpenPanel;
+  elements.controlsDrawer.dataset.panel = nextPanel;
+  elements.appearanceCard.open = nextPanel === 'settings' && elements.controlsDrawer.open;
+  updatePanelToggles(nextPanel);
+  scheduleIdleMode();
+}
+
+function closePanelsForCompactMode() {
+  elements.controlsDrawer.open = false;
+  document.querySelectorAll('.tool-card[open]').forEach((card) => {
+    card.open = false;
+  });
+  updatePanelToggles(elements.controlsDrawer.dataset.panel || 'tools');
+}
+
+function scheduleIdleMode() {
+  window.clearTimeout(idleTimer);
+
+  if (compactUi.active || document.hidden) {
+    return;
+  }
+
+  idleTimer = window.setTimeout(() => {
+    enterCompactMode();
+  }, idleDelayMs);
+}
+
+async function enterCompactMode() {
+  if (compactUi.active || document.hidden) {
+    return;
+  }
+
+  closePanelsForCompactMode();
+  compactUi.active = true;
+  document.body.classList.add('compact-mode');
+  elements.clockPanel.setAttribute('aria-label', '紧凑时钟，点击恢复完整窗口，拖动可移动位置');
+
+  try {
+    await shell?.setCompactMode?.(true);
+  } catch {
+    document.body.classList.remove('compact-mode');
+    compactUi.active = false;
+  }
+}
+
+async function exitCompactMode() {
+  if (!compactUi.active) {
+    return;
+  }
+
+  compactUi.active = false;
+  document.body.classList.remove('compact-mode');
+  elements.clockPanel.setAttribute('aria-label', '当前时间');
+
+  try {
+    await shell?.setCompactMode?.(false);
+  } catch {
+    // Renderer state is already restored; keep the UI usable if IPC fails.
+  }
+
+  scheduleIdleMode();
+}
+
+function trackActivity(event) {
+  if (compactUi.active) {
+    return;
+  }
+
+  if (event?.type === 'keydown' && ['Tab', 'Shift', 'Control', 'Alt', 'Meta'].includes(event.key)) {
+    return;
+  }
+
+  scheduleIdleMode();
+}
+
+function bindActivityTracking() {
+  ['pointerdown', 'pointermove', 'keydown', 'wheel', 'input', 'change'].forEach((eventName) => {
+    window.addEventListener(eventName, trackActivity, { passive: true });
+  });
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      window.clearTimeout(idleTimer);
+    } else {
+      scheduleIdleMode();
+    }
+  });
+}
+
+function bindCompactClockInteractions() {
+  elements.clockPanel.addEventListener('pointerdown', (event) => {
+    if (!compactUi.active || event.button !== 0) {
+      return;
+    }
+
+    compactUi.pointerId = event.pointerId;
+    compactUi.startX = event.screenX;
+    compactUi.startY = event.screenY;
+    compactUi.lastX = event.screenX;
+    compactUi.lastY = event.screenY;
+    compactUi.moved = false;
+    elements.clockPanel.setPointerCapture(event.pointerId);
+  });
+
+  elements.clockPanel.addEventListener('pointermove', (event) => {
+    if (!compactUi.active || compactUi.pointerId !== event.pointerId) {
+      return;
+    }
+
+    const deltaX = event.screenX - compactUi.lastX;
+    const deltaY = event.screenY - compactUi.lastY;
+    const totalMove = Math.hypot(event.screenX - compactUi.startX, event.screenY - compactUi.startY);
+
+    if (!compactUi.moved && totalMove <= compactClickMaxMove) {
+      return;
+    }
+
+    if (!compactUi.moved) {
+      compactUi.moved = true;
+    }
+
+    if (deltaX || deltaY) {
+      shell?.moveWindowBy?.(deltaX, deltaY);
+      compactUi.lastX = event.screenX;
+      compactUi.lastY = event.screenY;
+    }
+  });
+
+  elements.clockPanel.addEventListener('pointerup', (event) => {
+    if (!compactUi.active || compactUi.pointerId !== event.pointerId) {
+      return;
+    }
+
+    elements.clockPanel.releasePointerCapture(event.pointerId);
+    compactUi.pointerId = null;
+
+    if (!compactUi.moved) {
+      exitCompactMode();
+    }
+  });
+
+  elements.clockPanel.addEventListener('pointercancel', (event) => {
+    if (compactUi.pointerId === event.pointerId) {
+      compactUi.pointerId = null;
+    }
+  });
 }
 
 function syncPomodoroInputs() {
@@ -820,6 +1041,10 @@ function bindEvents() {
     applySettings();
   });
 
+  elements.autostartToggle.addEventListener('change', () => {
+    updateAutostartSetting(elements.autostartToggle.checked);
+  });
+
   elements.opacityInput.addEventListener('input', () => updateAppearanceSetting('opacity', elements.opacityInput.value));
   elements.fontFamilyInput.addEventListener('change', () => updateAppearanceSetting('fontFamily', elements.fontFamilyInput.value));
   elements.fontSizeInput.addEventListener('input', () => updateAppearanceSetting('fontSize', elements.fontSizeInput.value));
@@ -833,9 +1058,22 @@ function bindEvents() {
   elements.ringtoneTest.addEventListener('click', playAlertTone);
   elements.ringtoneDefault.addEventListener('click', useDefaultRingtone);
 
+  elements.settingsToggle.addEventListener('click', () => openPanel('settings'));
+  elements.toolsToggle.addEventListener('click', () => openPanel('tools'));
+  elements.controlsDrawer.addEventListener('toggle', () => {
+    updatePanelToggles(elements.controlsDrawer.dataset.panel || 'tools');
+  });
+
   elements.minimizeBtn.addEventListener('click', () => shell?.minimize());
   elements.maximizeBtn.addEventListener('click', () => shell?.toggleMaximize());
   elements.closeBtn.addEventListener('click', () => shell?.close());
+
+  shell?.onRestoreFullUi?.(() => {
+    exitCompactMode();
+  });
+
+  bindActivityTracking();
+  bindCompactClockInteractions();
 
   [
     elements.pomodoroFocusInput,
@@ -905,6 +1143,8 @@ function init() {
   setDefaultReminderTime();
   bindEvents();
   applySettings();
+  updatePanelToggles(elements.controlsDrawer.dataset.panel || 'tools');
+  scheduleIdleMode();
   initDefaultRingtone();
   resetPomodoro();
   resetCountdown();
@@ -912,6 +1152,7 @@ function init() {
   renderReminders();
   updateClock();
   initVersionLabel();
+  refreshAutostartInfo();
 
   window.setInterval(() => {
     updateClock();

@@ -45,6 +45,17 @@ Categories=Utility;
 StartupWMClass=Elegant Clock
 EOF
 
+cat > "$PACKAGE_ROOT/.INSTALL" <<'EOF'
+post_install() {
+  echo "Elegant Clock: enable autostart from Settings after first launch."
+  echo "For a manual Arch install-time setup, copy /usr/share/applications/elegant-clock.desktop to ~/.config/autostart/."
+}
+
+post_upgrade() {
+  post_install
+}
+EOF
+
 INSTALLED_SIZE=$(du -sb "$PACKAGE_ROOT/opt" "$PACKAGE_ROOT/usr" | awk '{ total += $1 } END { print total }')
 BUILD_DATE=$(date +%s)
 
@@ -59,6 +70,7 @@ packager = Dai2010
 size = ${INSTALLED_SIZE}
 arch = x86_64
 license = GPL-3.0-only
+scriptlet = .INSTALL
 depend = gtk3
 depend = nss
 depend = libxss
@@ -73,8 +85,8 @@ EOF
 
 (
   cd "$PACKAGE_ROOT"
-  bsdtar -czf .MTREE --format=mtree --options='!all,use-set,type,uid,gid,mode,time,size,md5,sha256,link' .PKGINFO opt usr
-  bsdtar --uid 0 --gid 0 --numeric-owner -cf - .PKGINFO .MTREE opt usr | zstd -T0 -19 -o "$ARTIFACT"
+  bsdtar -czf .MTREE --format=mtree --options='!all,use-set,type,uid,gid,mode,time,size,md5,sha256,link' .PKGINFO .INSTALL opt usr
+  bsdtar --uid 0 --gid 0 --numeric-owner -cf - .PKGINFO .INSTALL .MTREE opt usr | zstd -T0 -19 -o "$ARTIFACT"
 )
 
 echo "Created $ARTIFACT"

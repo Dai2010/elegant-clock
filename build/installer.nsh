@@ -1,10 +1,8 @@
 !include LogicLib.nsh
 !include nsDialogs.nsh
 
-!macro customHeader
-  Var AutoStartCheckbox
-  Var AutoStartEnabled
-!macroend
+Var AutoStartCheckbox
+Var AutoStartEnabled
 
 !macro customInit
   StrCpy $AutoStartEnabled "0"

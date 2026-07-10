@@ -42,6 +42,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: npm
 
       - name: Install Linux packaging tools
         if: runner.os == 'Linux'
@@ -50,7 +51,19 @@ jobs:
           sudo apt-get install -y rpm libarchive-tools zstd
 
       - name: Install dependencies
-        run: npm ci --fetch-retries=5 --fetch-retry-mintimeout=20000 --fetch-retry-maxtimeout=120000
+        shell: bash
+        run: |
+          npm config set fetch-retries 5
+          npm config set fetch-retry-mintimeout 20000
+          npm config set fetch-retry-maxtimeout 120000
+          for attempt in 1 2 3; do
+            if npm ci --prefer-offline; then
+              exit 0
+            fi
+            echo "npm ci failed on attempt ${attempt}" >&2
+            sleep $((attempt * 20))
+          done
+          npm ci --fetch-retries=5 --fetch-retry-mintimeout=20000 --fetch-retry-maxtimeout=120000
 
       - name: Build installers
         run: npm run ${{ matrix.script }}

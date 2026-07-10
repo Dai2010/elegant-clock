@@ -70,6 +70,12 @@ button:active {
   transform: translateY(0);
 }
 
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+  transform: none;
+}
+
 input,
 textarea {
   width: 100%;
@@ -178,6 +184,10 @@ body.opaque .app-shell {
   overflow: hidden;
 }
 
+.clock-only-shell .clock-panel {
+  min-height: calc(100vh - 4.5rem);
+}
+
 .date-text {
   margin: 0;
   color: var(--muted);
@@ -200,6 +210,18 @@ body.opaque .app-shell {
   max-width: 100%;
   overflow: hidden;
   text-overflow: clip;
+  white-space: nowrap;
+}
+
+.countdown-summary {
+  max-width: 100%;
+  margin: 0.1rem 0 0;
+  color: var(--muted);
+  font-size: clamp(0.92rem, 3vw, 1.15rem);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -341,6 +363,98 @@ body.compact-mode .date-text {
 body.compact-mode .time-text {
   width: 100%;
   font-size: clamp(2.4rem, 18vw, 4.4rem);
+}
+
+body.compact-mode .countdown-summary {
+  display: none;
+}
+
+.utility-window {
+  min-height: 100vh;
+  overflow: auto;
+}
+
+.utility-shell {
+  display: grid;
+  gap: 1rem;
+  min-height: 100vh;
+  padding: 1rem;
+  background: linear-gradient(160deg, rgba(var(--panel-rgb), 0.96), rgba(15, 23, 42, 0.92));
+}
+
+.utility-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.utility-header h1,
+.eyebrow {
+  margin: 0;
+}
+
+.utility-header h1 {
+  font-size: clamp(1.6rem, 5vw, 2.2rem);
+}
+
+.eyebrow {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.utility-card {
+  align-self: start;
+}
+
+.padded-card {
+  padding: 1rem;
+}
+
+.tools-shell {
+  grid-template-rows: auto 1fr;
+}
+
+.back-button {
+  flex: 0 0 auto;
+}
+
+.tool-menu-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.9rem;
+  align-self: start;
+}
+
+.tool-menu-item {
+  display: grid;
+  gap: 0.4rem;
+  min-height: 8rem;
+  align-content: center;
+  text-align: left;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.tool-menu-item strong {
+  font-size: 1.15rem;
+}
+
+.tool-menu-item span {
+  color: var(--muted);
+  font-size: 0.86rem;
+}
+
+.tool-view {
+  align-self: start;
+}
+
+.ringtone-actions {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 .settings-panel {
@@ -598,10 +712,20 @@ body.compact-mode .time-text {
   }
 
   .settings-panel,
+  .tool-menu-grid,
   .two-cols,
   .three-cols,
   .four-cols {
     grid-template-columns: 1fr;
+  }
+
+  .utility-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .ringtone-actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .reminder-item {

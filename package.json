@@ -1,6 +1,6 @@
 {
   "name": "elegant-clock",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "A cross-platform customizable desktop clock with countdown, target-date timer, stopwatch, pomodoro, reminders, and date display.",
   "main": "src/main.js",
   "author": "Dai2010",

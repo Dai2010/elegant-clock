@@ -7,9 +7,13 @@ const packageInfo = require('../package.json');
 
 let mainWindow;
 let aboutWindow;
+let settingsWindow;
+let toolsWindow;
 let tray;
 let isQuitting = false;
 let compactMode = false;
+let stateSaveTimer;
+let timerEngine;
 
 const defaultWindowSize = {
   width: 560,
@@ -31,6 +35,52 @@ const projectHomepageUrl = 'https://github.com/Dai2010/elegant-clock';
 const autostartDesktopFileName = 'elegant-clock.desktop';
 const windowsRunEntryName = 'Elegant Clock';
 const autostartArgs = ['--autostart'];
+
+const defaultSettings = {
+  transparent: true,
+  alwaysOnTop: false,
+  opacity: 78,
+  fontFamily: '',
+  fontSize: 82,
+  fontColor: '#f8fbff',
+  backgroundColor: '#101623',
+  ringtone: null,
+  pomodoro: {
+    focusMinutes: 25,
+    shortBreakMinutes: 5,
+    longBreakMinutes: 15,
+    longBreakEvery: 4
+  }
+};
+
+const appState = {
+  settings: structuredClone(defaultSettings),
+  pomodoro: {
+    phase: 'focus',
+    running: false,
+    deadlineMs: 0,
+    remainingMs: 25 * 60 * 1000,
+    completedFocusSessions: 0,
+    status: '待开始'
+  },
+  countdown: {
+    mode: 'duration',
+    running: false,
+    deadlineMs: 0,
+    remainingMs: 5 * 60 * 1000,
+    durationMs: 5 * 60 * 1000,
+    targetMs: 0,
+    finished: false,
+    status: '待开始'
+  },
+  stopwatch: {
+    running: false,
+    startEpochMs: 0,
+    elapsedMs: 0,
+    status: '待开始'
+  },
+  reminders: []
+};
 
 const platformWindowConfig = {
   win32: {
@@ -55,6 +105,614 @@ const gotSingleInstanceLock = app.requestSingleInstanceLock();
 
 function getWindowFromEvent(event) {
   return BrowserWindow.fromWebContents(event.sender);
+}
+
+function clone(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function clampNumber(value, min, max) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return min;
+  }
+
+  return Math.min(max, Math.max(min, Math.trunc(parsed)));
+}
+
+function normalizeColor(value, fallback) {
+  return typeof value === 'string' && /^#[\da-f]{6}$/i.test(value) ? value : fallback;
+}
+
+function createDefaultRingtoneSetting() {
+  const ringtone = createRingtonePayload(getDefaultRingtonePath());
+  return {
+    type: 'bundled',
+    name: 'ringtone_default.mp3',
+    path: ringtone.path,
+    url: ringtone.url
+  };
+}
+
+function normalizeRingtone(ringtone) {
+  if (ringtone?.type === 'custom' && typeof ringtone.url === 'string' && ringtone.url.length > 0) {
+    return {
+      type: 'custom',
+      name: ringtone.name || '自定义铃声',
+      path: ringtone.path || '',
+      url: ringtone.url
+    };
+  }
+
+  return createDefaultRingtoneSetting();
+}
+
+function normalizeSettings(settings = {}) {
+  return {
+    transparent: settings.transparent !== false,
+    alwaysOnTop: Boolean(settings.alwaysOnTop),
+    opacity: clampNumber(settings.opacity, 20, 100),
+    fontFamily: typeof settings.fontFamily === 'string' ? settings.fontFamily.trim() : '',
+    fontSize: clampNumber(settings.fontSize, 48, 160),
+    fontColor: normalizeColor(settings.fontColor, '#f8fbff'),
+    backgroundColor: normalizeColor(settings.backgroundColor, '#101623'),
+    ringtone: normalizeRingtone(settings.ringtone),
+    pomodoro: {
+      focusMinutes: clampNumber(settings.pomodoro?.focusMinutes, 1, 180),
+      shortBreakMinutes: clampNumber(settings.pomodoro?.shortBreakMinutes, 1, 60),
+      longBreakMinutes: clampNumber(settings.pomodoro?.longBreakMinutes, 1, 120),
+      longBreakEvery: clampNumber(settings.pomodoro?.longBreakEvery, 1, 12)
+    }
+  };
+}
+
+function getStatePath() {
+  return path.join(app.getPath('userData'), 'state.json');
+}
+
+function getPomodoroPhaseLabel(phase = appState.pomodoro.phase) {
+  if (phase === 'shortBreak') {
+    return '短休息';
+  }
+
+  if (phase === 'longBreak') {
+    return '长休息';
+  }
+
+  return '专注';
+}
+
+function getPomodoroPhaseDurationMs(phase = appState.pomodoro.phase) {
+  const config = appState.settings.pomodoro;
+  if (phase === 'shortBreak') {
+    return config.shortBreakMinutes * 60 * 1000;
+  }
+
+  if (phase === 'longBreak') {
+    return config.longBreakMinutes * 60 * 1000;
+  }
+
+  return config.focusMinutes * 60 * 1000;
+}
+
+function normalizeAppState() {
+  appState.settings = normalizeSettings(appState.settings);
+  appState.pomodoro.phase = ['focus', 'shortBreak', 'longBreak'].includes(appState.pomodoro.phase)
+    ? appState.pomodoro.phase
+    : 'focus';
+  appState.pomodoro.running = Boolean(appState.pomodoro.running);
+  appState.pomodoro.deadlineMs = Number(appState.pomodoro.deadlineMs) || 0;
+  appState.pomodoro.remainingMs = Math.max(0, Number(appState.pomodoro.remainingMs) || getPomodoroPhaseDurationMs());
+  appState.pomodoro.completedFocusSessions = clampNumber(appState.pomodoro.completedFocusSessions, 0, 9999);
+  appState.pomodoro.status = appState.pomodoro.status || '待开始';
+
+  appState.countdown.mode = appState.countdown.mode === 'target' ? 'target' : 'duration';
+  appState.countdown.running = Boolean(appState.countdown.running);
+  appState.countdown.deadlineMs = Math.max(0, Number(appState.countdown.deadlineMs) || 0);
+  appState.countdown.durationMs = Math.max(0, Number(appState.countdown.durationMs) || 5 * 60 * 1000);
+  appState.countdown.targetMs = Math.max(0, Number(appState.countdown.targetMs) || 0);
+  appState.countdown.remainingMs = Math.max(0, Number(appState.countdown.remainingMs) || appState.countdown.durationMs);
+  appState.countdown.finished = Boolean(appState.countdown.finished);
+  appState.countdown.status = appState.countdown.status || '待开始';
+
+  appState.stopwatch.running = Boolean(appState.stopwatch.running);
+  appState.stopwatch.startEpochMs = Math.max(0, Number(appState.stopwatch.startEpochMs) || 0);
+  appState.stopwatch.elapsedMs = Math.max(0, Number(appState.stopwatch.elapsedMs) || 0);
+  appState.stopwatch.status = appState.stopwatch.status || '待开始';
+
+  appState.reminders = Array.isArray(appState.reminders)
+    ? appState.reminders
+        .filter((reminder) => Number.isFinite(Number(reminder?.scheduledAt)))
+        .map((reminder) => ({
+          id: String(reminder.id || `${Date.now()}-${Math.random()}`),
+          title: String(reminder.title || '提醒').slice(0, 60),
+          note: String(reminder.note || '').slice(0, 200),
+          scheduledAt: Number(reminder.scheduledAt),
+          createdAt: Number(reminder.createdAt) || Date.now(),
+          done: Boolean(reminder.done),
+          notifiedAt: Number(reminder.notifiedAt) || undefined
+        }))
+    : [];
+}
+
+function loadAppState() {
+  appState.settings = clone(defaultSettings);
+
+  try {
+    const savedState = JSON.parse(readFileSync(getStatePath(), 'utf8'));
+    Object.assign(appState.settings, savedState.settings || {});
+    Object.assign(appState.pomodoro, savedState.pomodoro || {});
+    Object.assign(appState.countdown, savedState.countdown || {});
+    Object.assign(appState.stopwatch, savedState.stopwatch || {});
+    appState.reminders = Array.isArray(savedState.reminders) ? savedState.reminders : [];
+  } catch {
+    appState.settings = clone(defaultSettings);
+  }
+
+  normalizeAppState();
+}
+
+function saveAppStateNow() {
+  try {
+    mkdirSync(path.dirname(getStatePath()), { recursive: true });
+    writeFileSync(getStatePath(), JSON.stringify(getPersistableState(), null, 2), 'utf8');
+  } catch {
+    // State persistence should never make the app unusable.
+  }
+}
+
+function scheduleStateSave() {
+  clearTimeout(stateSaveTimer);
+  stateSaveTimer = setTimeout(saveAppStateNow, 250);
+}
+
+function getCurrentCountdownRemainingMs() {
+  if (appState.countdown.running) {
+    return Math.max(0, appState.countdown.deadlineMs - Date.now());
+  }
+
+  return Math.max(0, appState.countdown.remainingMs);
+}
+
+function getCurrentPomodoroRemainingMs() {
+  if (appState.pomodoro.running) {
+    return Math.max(0, appState.pomodoro.deadlineMs - Date.now());
+  }
+
+  return Math.max(0, appState.pomodoro.remainingMs);
+}
+
+function getCurrentStopwatchElapsedMs() {
+  if (appState.stopwatch.running) {
+    return Math.max(0, Date.now() - appState.stopwatch.startEpochMs);
+  }
+
+  return Math.max(0, appState.stopwatch.elapsedMs);
+}
+
+function getPersistableState() {
+  const state = getStateSnapshot();
+  return {
+    settings: state.settings,
+    pomodoro: state.pomodoro,
+    countdown: state.countdown,
+    stopwatch: state.stopwatch,
+    reminders: state.reminders
+  };
+}
+
+function getStateSnapshot() {
+  return {
+    settings: clone(appState.settings),
+    pomodoro: {
+      ...clone(appState.pomodoro),
+      phaseLabel: getPomodoroPhaseLabel(),
+      remainingMs: getCurrentPomodoroRemainingMs()
+    },
+    countdown: {
+      ...clone(appState.countdown),
+      remainingMs: getCurrentCountdownRemainingMs()
+    },
+    stopwatch: {
+      ...clone(appState.stopwatch),
+      elapsedMs: getCurrentStopwatchElapsedMs()
+    },
+    reminders: clone(appState.reminders)
+  };
+}
+
+function sendToAllWindows(channel, payload) {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (!window.isDestroyed()) {
+      window.webContents.send(channel, payload);
+    }
+  }
+}
+
+function broadcastState() {
+  sendToAllWindows('state:changed', getStateSnapshot());
+}
+
+function applyWindowSettings() {
+  mainWindow?.setAlwaysOnTop(Boolean(appState.settings.alwaysOnTop), 'floating');
+}
+
+function showSystemNotification(title, body, focus = false, sourceWindow = mainWindow) {
+  const safeTitle = String(title || appDisplayName);
+  const safeBody = String(body || '提醒时间到了');
+
+  const audioWindow = mainWindow && !mainWindow.isDestroyed()
+    ? mainWindow
+    : BrowserWindow.getAllWindows().find((window) => !window.isDestroyed());
+  audioWindow?.webContents.send('alert:play', {
+    title: safeTitle,
+    body: safeBody,
+    ringtone: appState.settings.ringtone
+  });
+
+  if (Notification.isSupported()) {
+    const notification = new Notification({
+      title: safeTitle,
+      body: safeBody,
+      silent: true
+    });
+
+    notification.on('click', () => {
+      requestFullUi(sourceWindow && !sourceWindow.isDestroyed() ? sourceWindow : mainWindow);
+    });
+
+    notification.show();
+  } else {
+    sourceWindow?.flashFrame(true);
+  }
+
+  if (focus) {
+    requestFullUi(sourceWindow && !sourceWindow.isDestroyed() ? sourceWindow : mainWindow);
+  }
+}
+
+function completePomodoroPhase(manual = false) {
+  const finishedPhase = appState.pomodoro.phase;
+  const finishedLabel = getPomodoroPhaseLabel(finishedPhase);
+  appState.pomodoro.running = false;
+  appState.pomodoro.deadlineMs = 0;
+
+  if (finishedPhase === 'focus' && !manual) {
+    appState.pomodoro.completedFocusSessions += 1;
+  }
+
+  if (finishedPhase === 'focus') {
+    const shouldUseLongBreak = appState.pomodoro.completedFocusSessions > 0
+      && appState.pomodoro.completedFocusSessions % appState.settings.pomodoro.longBreakEvery === 0;
+    appState.pomodoro.phase = shouldUseLongBreak ? 'longBreak' : 'shortBreak';
+  } else {
+    appState.pomodoro.phase = 'focus';
+  }
+
+  const nextLabel = getPomodoroPhaseLabel();
+  appState.pomodoro.remainingMs = getPomodoroPhaseDurationMs();
+  appState.pomodoro.status = manual ? `已跳过，准备${nextLabel}` : `阶段完成，准备${nextLabel}`;
+
+  if (!manual) {
+    const body = finishedPhase === 'focus'
+      ? `${finishedLabel}结束，${nextLabel}时间到了。`
+      : `${finishedLabel}结束，准备开始专注。`;
+    showSystemNotification('番茄钟', body, true);
+  }
+
+  scheduleStateSave();
+  broadcastState();
+}
+
+function checkTimers() {
+  let changed = false;
+  const now = Date.now();
+  const hasLiveState = appState.countdown.running || appState.pomodoro.running || appState.stopwatch.running;
+
+  if (appState.countdown.running) {
+    appState.countdown.remainingMs = Math.max(0, appState.countdown.deadlineMs - now);
+
+    if (appState.countdown.remainingMs === 0) {
+      appState.countdown.running = false;
+      appState.countdown.finished = true;
+      appState.countdown.status = '已完成';
+      showSystemNotification('倒计时', '倒计时已结束。', true);
+      changed = true;
+    } else {
+      appState.countdown.status = '进行中';
+    }
+  }
+
+  if (appState.pomodoro.running) {
+    appState.pomodoro.remainingMs = Math.max(0, appState.pomodoro.deadlineMs - now);
+
+    if (appState.pomodoro.remainingMs === 0) {
+      completePomodoroPhase(false);
+      changed = true;
+    } else {
+      appState.pomodoro.status = '进行中';
+    }
+  }
+
+  for (const reminder of appState.reminders) {
+    if (!reminder.done && reminder.scheduledAt <= now) {
+      reminder.done = true;
+      reminder.notifiedAt = now;
+      showSystemNotification(`提醒：${reminder.title}`, reminder.note || '提醒时间到了。', true);
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    scheduleStateSave();
+  }
+
+  if (changed || hasLiveState) {
+    broadcastState();
+  }
+}
+
+function startTimerEngine() {
+  clearInterval(timerEngine);
+  timerEngine = setInterval(checkTimers, 1000);
+  checkTimers();
+}
+
+function updateSettings(partialSettings = {}) {
+  const nextSettings = {
+    ...appState.settings,
+    ...partialSettings,
+    pomodoro: {
+      ...appState.settings.pomodoro,
+      ...(partialSettings.pomodoro || {})
+    }
+  };
+
+  appState.settings = normalizeSettings(nextSettings);
+
+  if (!appState.pomodoro.running && appState.pomodoro.status === '待开始') {
+    appState.pomodoro.remainingMs = getPomodoroPhaseDurationMs();
+  }
+
+  applyWindowSettings();
+  scheduleStateSave();
+  broadcastState();
+  return getStateSnapshot();
+}
+
+function setCountdownMode(mode) {
+  appState.countdown.mode = mode === 'target' ? 'target' : 'duration';
+  appState.countdown.running = false;
+  appState.countdown.finished = false;
+  appState.countdown.deadlineMs = 0;
+  appState.countdown.remainingMs = appState.countdown.mode === 'duration'
+    ? appState.countdown.durationMs
+    : Math.max(0, appState.countdown.targetMs - Date.now());
+  appState.countdown.status = '待开始';
+  scheduleStateSave();
+  broadcastState();
+  return getStateSnapshot();
+}
+
+function configureCountdown(options = {}) {
+  if (options.mode === 'target' || options.mode === 'duration') {
+    appState.countdown.mode = options.mode;
+  }
+
+  if (Number.isFinite(Number(options.durationMs))) {
+    appState.countdown.durationMs = Math.max(0, Math.trunc(Number(options.durationMs)));
+  }
+
+  if (Number.isFinite(Number(options.targetMs))) {
+    appState.countdown.targetMs = Math.max(0, Math.trunc(Number(options.targetMs)));
+  }
+
+  if (!appState.countdown.running) {
+    appState.countdown.remainingMs = appState.countdown.mode === 'duration'
+      ? appState.countdown.durationMs
+      : Math.max(0, appState.countdown.targetMs - Date.now());
+    appState.countdown.finished = false;
+    appState.countdown.status = '待开始';
+  }
+
+  scheduleStateSave();
+  broadcastState();
+  return getStateSnapshot();
+}
+
+function startCountdown(options = {}) {
+  const hasInputOptions = ['mode', 'durationMs', 'targetMs'].some((key) => Object.hasOwn(options, key));
+  const shouldResume = appState.countdown.status === '已暂停' && appState.countdown.remainingMs > 0;
+  if (hasInputOptions && !shouldResume) {
+    configureCountdown(options);
+  }
+
+  const now = Date.now();
+  appState.countdown.finished = false;
+
+  if (appState.countdown.mode === 'duration') {
+    const remainingMs = appState.countdown.remainingMs > 0
+      ? appState.countdown.remainingMs
+      : appState.countdown.durationMs;
+
+    if (remainingMs <= 0) {
+      appState.countdown.status = '请输入大于 0 的时长';
+      broadcastState();
+      return getStateSnapshot();
+    }
+
+    appState.countdown.remainingMs = remainingMs;
+    appState.countdown.deadlineMs = now + remainingMs;
+  } else {
+    if (shouldResume) {
+      appState.countdown.deadlineMs = now + appState.countdown.remainingMs;
+      appState.countdown.targetMs = appState.countdown.deadlineMs;
+      appState.countdown.running = true;
+      appState.countdown.status = '进行中';
+      scheduleStateSave();
+      broadcastState();
+      return getStateSnapshot();
+    }
+
+    if (!Number.isFinite(appState.countdown.targetMs) || appState.countdown.targetMs <= now) {
+      appState.countdown.status = '请选择未来时间';
+      broadcastState();
+      return getStateSnapshot();
+    }
+
+    appState.countdown.deadlineMs = appState.countdown.targetMs;
+    appState.countdown.remainingMs = appState.countdown.targetMs - now;
+  }
+
+  appState.countdown.running = true;
+  appState.countdown.status = '进行中';
+  scheduleStateSave();
+  broadcastState();
+  return getStateSnapshot();
+}
+
+function pauseCountdown() {
+  if (appState.countdown.running) {
+    appState.countdown.remainingMs = getCurrentCountdownRemainingMs();
+    appState.countdown.running = false;
+    appState.countdown.status = '已暂停';
+    scheduleStateSave();
+    broadcastState();
+  }
+
+  return getStateSnapshot();
+}
+
+function resetCountdown() {
+  appState.countdown.running = false;
+  appState.countdown.finished = false;
+  appState.countdown.deadlineMs = 0;
+  appState.countdown.remainingMs = appState.countdown.mode === 'duration'
+    ? appState.countdown.durationMs
+    : Math.max(0, appState.countdown.targetMs - Date.now());
+  appState.countdown.status = '待开始';
+  scheduleStateSave();
+  broadcastState();
+  return getStateSnapshot();
+}
+
+function startPomodoro() {
+  if (!appState.pomodoro.running) {
+    appState.pomodoro.remainingMs ||= getPomodoroPhaseDurationMs();
+    appState.pomodoro.deadlineMs = Date.now() + appState.pomodoro.remainingMs;
+    appState.pomodoro.running = true;
+    appState.pomodoro.status = '进行中';
+    scheduleStateSave();
+    broadcastState();
+  }
+
+  return getStateSnapshot();
+}
+
+function pausePomodoro() {
+  if (appState.pomodoro.running) {
+    appState.pomodoro.remainingMs = getCurrentPomodoroRemainingMs();
+    appState.pomodoro.running = false;
+    appState.pomodoro.status = '已暂停';
+    scheduleStateSave();
+    broadcastState();
+  }
+
+  return getStateSnapshot();
+}
+
+function resetPomodoro() {
+  appState.pomodoro.phase = 'focus';
+  appState.pomodoro.running = false;
+  appState.pomodoro.deadlineMs = 0;
+  appState.pomodoro.remainingMs = getPomodoroPhaseDurationMs();
+  appState.pomodoro.completedFocusSessions = 0;
+  appState.pomodoro.status = '待开始';
+  scheduleStateSave();
+  broadcastState();
+  return getStateSnapshot();
+}
+
+function startStopwatch() {
+  if (!appState.stopwatch.running) {
+    appState.stopwatch.startEpochMs = Date.now() - appState.stopwatch.elapsedMs;
+    appState.stopwatch.running = true;
+    appState.stopwatch.status = '进行中';
+    scheduleStateSave();
+    broadcastState();
+  }
+
+  return getStateSnapshot();
+}
+
+function pauseStopwatch() {
+  if (appState.stopwatch.running) {
+    appState.stopwatch.elapsedMs = getCurrentStopwatchElapsedMs();
+    appState.stopwatch.running = false;
+    appState.stopwatch.status = '已暂停';
+    scheduleStateSave();
+    broadcastState();
+  }
+
+  return getStateSnapshot();
+}
+
+function resetStopwatch() {
+  appState.stopwatch.running = false;
+  appState.stopwatch.startEpochMs = 0;
+  appState.stopwatch.elapsedMs = 0;
+  appState.stopwatch.status = '待开始';
+  scheduleStateSave();
+  broadcastState();
+  return getStateSnapshot();
+}
+
+function createReminderId() {
+  return globalThis.crypto?.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function addReminder(reminder = {}) {
+  const scheduledAt = Number(reminder.scheduledAt);
+  if (!Number.isFinite(scheduledAt) || scheduledAt <= Date.now()) {
+    throw new Error('请选择未来的提醒时间');
+  }
+
+  appState.reminders.push({
+    id: createReminderId(),
+    title: String(reminder.title || '提醒').trim().slice(0, 60) || '提醒',
+    note: String(reminder.note || '').trim().slice(0, 200),
+    scheduledAt,
+    createdAt: Date.now(),
+    done: false
+  });
+  scheduleStateSave();
+  broadcastState();
+  return getStateSnapshot();
+}
+
+function updateReminder(id, action) {
+  const reminder = appState.reminders.find((item) => item.id === id);
+  if (!reminder) {
+    return getStateSnapshot();
+  }
+
+  if (action === 'delete') {
+    appState.reminders = appState.reminders.filter((item) => item.id !== id);
+  } else if (action === 'toggle') {
+    reminder.done = !reminder.done;
+    reminder.notifiedAt = reminder.done ? Date.now() : undefined;
+  }
+
+  scheduleStateSave();
+  broadcastState();
+  return getStateSnapshot();
+}
+
+function clearDoneReminders() {
+  appState.reminders = appState.reminders.filter((reminder) => !reminder.done);
+  scheduleStateSave();
+  broadcastState();
+  return getStateSnapshot();
 }
 
 function escapeDesktopEntryValue(value) {
@@ -427,6 +1085,14 @@ function updateTrayMenu() {
       click: () => hideWindowToTray()
     },
     {
+      label: '设置',
+      click: () => createSettingsWindow()
+    },
+    {
+      label: '功能',
+      click: () => createToolsWindow()
+    },
+    {
       label: '开机自启动',
       type: 'checkbox',
       enabled: autostartInfo.supported,
@@ -512,6 +1178,10 @@ function createWindow() {
 
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
+    applyWindowSettings();
+  });
+  mainWindow.webContents.once('did-finish-load', () => {
+    mainWindow?.webContents.send('state:changed', getStateSnapshot());
   });
 
   mainWindow.on('close', (event) => {
@@ -527,6 +1197,83 @@ function createWindow() {
   });
 
   mainWindow.loadFile(path.join(__dirname, 'index.html'));
+}
+
+function createManagedWindow(kind, options) {
+  const existingWindow = kind === 'settings' ? settingsWindow : toolsWindow;
+  if (existingWindow && !existingWindow.isDestroyed()) {
+    existingWindow.show();
+    existingWindow.focus();
+    return existingWindow;
+  }
+
+  const window = new BrowserWindow({
+    width: options.width,
+    height: options.height,
+    minWidth: options.minWidth,
+    minHeight: options.minHeight,
+    title: options.title,
+    frame: true,
+    backgroundColor: '#101623',
+    icon: getIconPath(),
+    show: false,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true
+    }
+  });
+
+  window.setMenuBarVisibility(false);
+  window.once('ready-to-show', () => {
+    window.show();
+  });
+  window.webContents.once('did-finish-load', () => {
+    window.webContents.send('state:changed', getStateSnapshot());
+  });
+  window.webContents.setWindowOpenHandler(({ url }) => {
+    openExternalUrlSafely(url);
+    return { action: 'deny' };
+  });
+  window.on('closed', () => {
+    if (kind === 'settings') {
+      settingsWindow = null;
+    } else {
+      toolsWindow = null;
+    }
+  });
+  window.loadFile(path.join(__dirname, options.file));
+
+  if (kind === 'settings') {
+    settingsWindow = window;
+  } else {
+    toolsWindow = window;
+  }
+
+  return window;
+}
+
+function createSettingsWindow() {
+  return createManagedWindow('settings', {
+    file: 'settings.html',
+    title: 'Elegant Clock 设置',
+    width: 660,
+    height: 720,
+    minWidth: 520,
+    minHeight: 560
+  });
+}
+
+function createToolsWindow() {
+  return createManagedWindow('tools', {
+    file: 'tools.html',
+    title: 'Elegant Clock 功能',
+    width: 660,
+    height: 720,
+    minWidth: 520,
+    minHeight: 560
+  });
 }
 
 function createAboutWindow() {
@@ -589,8 +1336,10 @@ if (!gotSingleInstanceLock) {
   });
 
   app.whenReady().then(() => {
+    loadAppState();
     createWindow();
     createTray();
+    startTimerEngine();
 
     app.on('activate', () => {
       requestOrCreateFullUi();
@@ -600,6 +1349,7 @@ if (!gotSingleInstanceLock) {
 
 app.on('before-quit', () => {
   isQuitting = true;
+  saveAppStateNow();
 });
 
 app.on('window-all-closed', () => {
@@ -617,7 +1367,54 @@ ipcMain.handle('app:open-about', () => {
   return true;
 });
 
+ipcMain.handle('app:open-settings', () => {
+  createSettingsWindow();
+  return true;
+});
+
+ipcMain.handle('app:open-tools', () => {
+  createToolsWindow();
+  return true;
+});
+
 ipcMain.handle('app:open-external', (_event, url) => openExternalUrl(url));
+
+ipcMain.handle('state:get', () => getStateSnapshot());
+
+ipcMain.handle('state:update-settings', (_event, partialSettings) => updateSettings(partialSettings || {}));
+
+ipcMain.handle('countdown:set-mode', (_event, mode) => setCountdownMode(mode));
+
+ipcMain.handle('countdown:configure', (_event, options) => configureCountdown(options || {}));
+
+ipcMain.handle('countdown:start', (_event, options) => startCountdown(options || {}));
+
+ipcMain.handle('countdown:pause', () => pauseCountdown());
+
+ipcMain.handle('countdown:reset', () => resetCountdown());
+
+ipcMain.handle('pomodoro:start', () => startPomodoro());
+
+ipcMain.handle('pomodoro:pause', () => pausePomodoro());
+
+ipcMain.handle('pomodoro:skip', () => {
+  completePomodoroPhase(true);
+  return getStateSnapshot();
+});
+
+ipcMain.handle('pomodoro:reset', () => resetPomodoro());
+
+ipcMain.handle('stopwatch:start', () => startStopwatch());
+
+ipcMain.handle('stopwatch:pause', () => pauseStopwatch());
+
+ipcMain.handle('stopwatch:reset', () => resetStopwatch());
+
+ipcMain.handle('reminder:add', (_event, reminder) => addReminder(reminder || {}));
+
+ipcMain.handle('reminder:update', (_event, id, action) => updateReminder(String(id || ''), action));
+
+ipcMain.handle('reminder:clear-done', () => clearDoneReminders());
 
 ipcMain.handle('app:get-default-ringtone', () => createRingtonePayload(getDefaultRingtonePath()));
 
@@ -654,27 +1451,7 @@ ipcMain.handle('notification:show', (event, options = {}) => {
   const window = getWindowFromEvent(event);
   const title = String(options.title || 'Elegant Clock');
   const body = String(options.body || '提醒时间到了');
-
-  if (Notification.isSupported()) {
-    const notification = new Notification({
-      title,
-      body,
-      silent: true
-    });
-
-    notification.on('click', () => {
-      requestFullUi(window);
-    });
-
-    notification.show();
-  } else {
-    window?.flashFrame(true);
-  }
-
-  if (options.focus) {
-    requestFullUi(window);
-  }
-
+  showSystemNotification(title, body, Boolean(options.focus), window);
   return true;
 });
 

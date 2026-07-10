@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' file: blob:;" />
+    <title>Elegant Clock 设置</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body class="opaque utility-window">
+    <main class="utility-shell">
+      <header class="utility-header">
+        <div>
+          <p class="eyebrow">Elegant Clock</p>
+          <h1>设置</h1>
+        </div>
+        <span id="appearance-status" class="status-text">可自定义</span>
+      </header>
+
+      <section class="tool-card utility-card" aria-label="显示设置">
+        <div class="card-body padded-card">
+          <div class="settings-panel">
+            <label class="switch-row">
+              <input id="transparent-toggle" type="checkbox" />
+              <span>透明显示</span>
+            </label>
+            <label class="switch-row">
+              <input id="always-top-toggle" type="checkbox" />
+              <span>窗口置顶</span>
+            </label>
+            <label class="switch-row">
+              <input id="autostart-toggle" type="checkbox" />
+              <span>开机自启动</span>
+            </label>
+          </div>
+
+          <p id="autostart-status" class="settings-hint">正在读取自启动状态…</p>
+
+          <div class="input-grid two-cols">
+            <label>
+              透明度
+              <span class="range-row">
+                <input id="opacity-input" type="range" min="20" max="100" step="1" value="78" />
+                <span id="opacity-value" class="value-chip">78%</span>
+              </span>
+            </label>
+            <label>
+              时钟字体大小
+              <span class="range-row">
+                <input id="font-size-input" type="range" min="48" max="160" step="1" value="82" />
+                <span id="font-size-value" class="value-chip">82px</span>
+              </span>
+            </label>
+          </div>
+
+          <div class="input-grid two-cols">
+            <label>
+              字体
+              <input id="font-family-input" type="text" list="font-presets" placeholder="系统默认" />
+              <datalist id="font-presets">
+                <option value="system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"></option>
+                <option value="Microsoft YaHei, Segoe UI, sans-serif"></option>
+                <option value="Noto Sans CJK SC, Noto Sans, sans-serif"></option>
+                <option value="Arial, Helvetica, sans-serif"></option>
+                <option value="Georgia, serif"></option>
+                <option value="Consolas, Cascadia Mono, monospace"></option>
+              </datalist>
+            </label>
+            <label>
+              铃声
+              <span id="ringtone-label" class="readonly-field">默认：ringtone_default.mp3</span>
+            </label>
+          </div>
+
+          <div class="input-grid three-cols">
+            <label>
+              字体颜色
+              <input id="font-color-input" type="color" value="#f8fbff" />
+            </label>
+            <label>
+              背景颜色
+              <input id="background-color-input" type="color" value="#101623" />
+            </label>
+            <label>
+              铃声操作
+              <span class="mini-button-row ringtone-actions">
+                <button id="ringtone-choose" type="button">选择</button>
+                <button id="ringtone-test" type="button">试听</button>
+                <button id="ringtone-stop" type="button" disabled>停止</button>
+                <button id="ringtone-default" type="button">默认</button>
+              </span>
+            </label>
+          </div>
+
+          <div class="about-settings-row">
+            <div>
+              <strong>关于</strong>
+              <p>查看作者主页、项目主页和开源协议。</p>
+            </div>
+            <button id="about-open" type="button">打开关于</button>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <script src="settings.js"></script>
+  </body>
+</html>

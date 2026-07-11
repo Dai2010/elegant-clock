@@ -46,6 +46,7 @@ body.compact-mode {
 
 button,
 input,
+select,
 textarea {
   font: inherit;
 }
@@ -77,6 +78,7 @@ button:disabled {
 }
 
 input,
+select,
 textarea {
   width: 100%;
   border: 1px solid var(--border);
@@ -103,6 +105,7 @@ textarea {
 }
 
 input:focus,
+select:focus,
 textarea:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px rgba(125, 211, 252, 0.14);

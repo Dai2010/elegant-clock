@@ -35,6 +35,7 @@ const projectHomepageUrl = 'https://github.com/Dai2010/elegant-clock';
 const autostartDesktopFileName = 'elegant-clock.desktop';
 const windowsRunEntryName = 'Elegant Clock';
 const autostartArgs = ['--autostart'];
+const maxTargetNotifyBeforeMs = 3650 * 24 * 60 * 60 * 1000;
 
 const defaultSettings = {
   transparent: true,
@@ -70,6 +71,9 @@ const appState = {
     remainingMs: 5 * 60 * 1000,
     durationMs: 5 * 60 * 1000,
     targetMs: 0,
+    targetNotifyBeforeUnit: 'hours',
+    targetNotifyBeforeMs: 0,
+    targetPreNotified: false,
     finished: false,
     status: '待开始'
   },
@@ -118,6 +122,30 @@ function clampNumber(value, min, max) {
   }
 
   return Math.min(max, Math.max(min, Math.trunc(parsed)));
+}
+
+function normalizeCountdownNotifyUnit(unit) {
+  return unit === 'days' ? 'days' : 'hours';
+}
+
+function normalizeCountdownNotifyBeforeMs(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return 0;
+  }
+
+  return Math.min(maxTargetNotifyBeforeMs, Math.max(0, Math.trunc(parsed)));
+}
+
+function formatLeadTime(milliseconds) {
+  const safeMs = Math.max(0, Math.trunc(Number(milliseconds) || 0));
+  const totalHours = Math.max(1, Math.ceil(safeMs / (60 * 60 * 1000)));
+
+  if (totalHours >= 24 && totalHours % 24 === 0) {
+    return `${totalHours / 24} 天`;
+  }
+
+  return `${totalHours} 小时`;
 }
 
 function normalizeColor(value, fallback) {
@@ -211,6 +239,9 @@ function normalizeAppState() {
   appState.countdown.deadlineMs = Math.max(0, Number(appState.countdown.deadlineMs) || 0);
   appState.countdown.durationMs = Math.max(0, Number(appState.countdown.durationMs) || 5 * 60 * 1000);
   appState.countdown.targetMs = Math.max(0, Number(appState.countdown.targetMs) || 0);
+  appState.countdown.targetNotifyBeforeUnit = normalizeCountdownNotifyUnit(appState.countdown.targetNotifyBeforeUnit);
+  appState.countdown.targetNotifyBeforeMs = normalizeCountdownNotifyBeforeMs(appState.countdown.targetNotifyBeforeMs);
+  appState.countdown.targetPreNotified = Boolean(appState.countdown.targetPreNotified);
   appState.countdown.remainingMs = Math.max(0, Number(appState.countdown.remainingMs) || appState.countdown.durationMs);
   appState.countdown.finished = Boolean(appState.countdown.finished);
   appState.countdown.status = appState.countdown.status || '待开始';
@@ -337,24 +368,26 @@ function applyWindowSettings() {
   mainWindow?.setAlwaysOnTop(Boolean(appState.settings.alwaysOnTop), 'floating');
 }
 
-function showSystemNotification(title, body, focus = false, sourceWindow = mainWindow) {
+function showSystemNotification(title, body, focus = false, sourceWindow = mainWindow, playSound = false) {
   const safeTitle = String(title || appDisplayName);
   const safeBody = String(body || '提醒时间到了');
 
-  const audioWindow = mainWindow && !mainWindow.isDestroyed()
-    ? mainWindow
-    : BrowserWindow.getAllWindows().find((window) => !window.isDestroyed());
-  audioWindow?.webContents.send('alert:play', {
-    title: safeTitle,
-    body: safeBody,
-    ringtone: appState.settings.ringtone
-  });
+  if (playSound) {
+    const audioWindow = mainWindow && !mainWindow.isDestroyed()
+      ? mainWindow
+      : BrowserWindow.getAllWindows().find((window) => !window.isDestroyed());
+    audioWindow?.webContents.send('alert:play', {
+      title: safeTitle,
+      body: safeBody,
+      ringtone: appState.settings.ringtone
+    });
+  }
 
   if (Notification.isSupported()) {
     const notification = new Notification({
       title: safeTitle,
       body: safeBody,
-      silent: true
+      silent: playSound
     });
 
     notification.on('click', () => {
@@ -412,11 +445,29 @@ function checkTimers() {
   if (appState.countdown.running) {
     appState.countdown.remainingMs = Math.max(0, appState.countdown.deadlineMs - now);
 
+    if (
+      appState.countdown.mode === 'target'
+      && appState.countdown.targetNotifyBeforeMs > 0
+      && !appState.countdown.targetPreNotified
+      && appState.countdown.remainingMs > 0
+      && appState.countdown.remainingMs <= appState.countdown.targetNotifyBeforeMs
+    ) {
+      appState.countdown.targetPreNotified = true;
+      showSystemNotification(
+        '指定日期倒计时',
+        `距离目标时间还剩约 ${formatLeadTime(appState.countdown.targetNotifyBeforeMs)}。`,
+        false,
+        mainWindow,
+        false
+      );
+      changed = true;
+    }
+
     if (appState.countdown.remainingMs === 0) {
       appState.countdown.running = false;
       appState.countdown.finished = true;
       appState.countdown.status = '已完成';
-      showSystemNotification('倒计时', '倒计时已结束。', true);
+      showSystemNotification('倒计时', '倒计时已结束。', true, mainWindow, appState.countdown.mode === 'duration');
       changed = true;
     } else {
       appState.countdown.status = '进行中';
@@ -438,7 +489,7 @@ function checkTimers() {
     if (!reminder.done && reminder.scheduledAt <= now) {
       reminder.done = true;
       reminder.notifiedAt = now;
-      showSystemNotification(`提醒：${reminder.title}`, reminder.note || '提醒时间到了。', true);
+      showSystemNotification(`提醒：${reminder.title}`, reminder.note || '提醒时间到了。', true, mainWindow, false);
       changed = true;
     }
   }
@@ -484,6 +535,7 @@ function setCountdownMode(mode) {
   appState.countdown.mode = mode === 'target' ? 'target' : 'duration';
   appState.countdown.running = false;
   appState.countdown.finished = false;
+  appState.countdown.targetPreNotified = false;
   appState.countdown.deadlineMs = 0;
   appState.countdown.remainingMs = appState.countdown.mode === 'duration'
     ? appState.countdown.durationMs
@@ -495,6 +547,9 @@ function setCountdownMode(mode) {
 }
 
 function configureCountdown(options = {}) {
+  const previousTargetMs = appState.countdown.targetMs;
+  const previousNotifyBeforeMs = appState.countdown.targetNotifyBeforeMs;
+
   if (options.mode === 'target' || options.mode === 'duration') {
     appState.countdown.mode = options.mode;
   }
@@ -505,6 +560,21 @@ function configureCountdown(options = {}) {
 
   if (Number.isFinite(Number(options.targetMs))) {
     appState.countdown.targetMs = Math.max(0, Math.trunc(Number(options.targetMs)));
+  }
+
+  if (Object.hasOwn(options, 'targetNotifyBeforeMs')) {
+    appState.countdown.targetNotifyBeforeMs = normalizeCountdownNotifyBeforeMs(options.targetNotifyBeforeMs);
+  }
+
+  if (Object.hasOwn(options, 'targetNotifyBeforeUnit')) {
+    appState.countdown.targetNotifyBeforeUnit = normalizeCountdownNotifyUnit(options.targetNotifyBeforeUnit);
+  }
+
+  if (
+    appState.countdown.targetMs !== previousTargetMs
+    || appState.countdown.targetNotifyBeforeMs !== previousNotifyBeforeMs
+  ) {
+    appState.countdown.targetPreNotified = false;
   }
 
   if (!appState.countdown.running) {
@@ -521,7 +591,8 @@ function configureCountdown(options = {}) {
 }
 
 function startCountdown(options = {}) {
-  const hasInputOptions = ['mode', 'durationMs', 'targetMs'].some((key) => Object.hasOwn(options, key));
+  const hasInputOptions = ['mode', 'durationMs', 'targetMs', 'targetNotifyBeforeMs', 'targetNotifyBeforeUnit']
+    .some((key) => Object.hasOwn(options, key));
   const shouldResume = appState.countdown.status === '已暂停' && appState.countdown.remainingMs > 0;
   if (hasInputOptions && !shouldResume) {
     configureCountdown(options);
@@ -586,6 +657,7 @@ function pauseCountdown() {
 function resetCountdown() {
   appState.countdown.running = false;
   appState.countdown.finished = false;
+  appState.countdown.targetPreNotified = false;
   appState.countdown.deadlineMs = 0;
   appState.countdown.remainingMs = appState.countdown.mode === 'duration'
     ? appState.countdown.durationMs

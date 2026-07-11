@@ -108,6 +108,20 @@
               目标日期时间
               <input id="target-input" type="datetime-local" />
             </label>
+            <div class="input-grid two-cols">
+              <label>
+                提前通知
+                <input id="target-notify-before-input" type="number" min="0" max="87600" step="1" value="0" />
+              </label>
+              <label>
+                单位
+                <select id="target-notify-before-unit">
+                  <option value="hours">小时</option>
+                  <option value="days">天</option>
+                </select>
+              </label>
+            </div>
+            <p class="settings-hint">设置为 0 表示不提前通知；指定日期倒计时只调用系统通知，不播放铃声。</p>
           </div>
 
           <output id="countdown-display" class="timer-display">00:05:00</output>

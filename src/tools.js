@@ -33,6 +33,8 @@ const elements = {
   minutesInput: document.querySelector('#minutes-input'),
   secondsInput: document.querySelector('#seconds-input'),
   targetInput: document.querySelector('#target-input'),
+  targetNotifyBeforeInput: document.querySelector('#target-notify-before-input'),
+  targetNotifyBeforeUnit: document.querySelector('#target-notify-before-unit'),
   stopwatchStatus: document.querySelector('#stopwatch-status'),
   stopwatchDisplay: document.querySelector('#stopwatch-display'),
   stopwatchStart: document.querySelector('#stopwatch-start'),
@@ -49,6 +51,7 @@ const elements = {
 
 let currentState;
 let activeTool = '';
+const editingFields = new WeakSet();
 
 const toolTitles = {
   pomodoro: '番茄钟',
@@ -72,6 +75,26 @@ function clampNumber(value, min, max) {
   }
 
   return Math.min(max, Math.max(min, Math.trunc(parsed)));
+}
+
+function isEditingField(element) {
+  return document.activeElement === element || editingFields.has(element);
+}
+
+function setInputValue(element, value) {
+  const nextValue = String(value);
+  if (!isEditingField(element) && element.value !== nextValue) {
+    element.value = nextValue;
+  }
+}
+
+function trackEditableField(element) {
+  element.addEventListener('focusin', () => {
+    editingFields.add(element);
+  });
+  element.addEventListener('focusout', () => {
+    window.setTimeout(() => editingFields.delete(element), 120);
+  });
 }
 
 function normalizeColor(value, fallback) {
@@ -150,14 +173,43 @@ function readDurationMs() {
 }
 
 function readTargetMs() {
-  return elements.targetInput.value ? new Date(elements.targetInput.value).getTime() : 0;
+  if (!elements.targetInput.value) {
+    return Number.NaN;
+  }
+
+  const targetMs = new Date(elements.targetInput.value).getTime();
+  return Number.isFinite(targetMs) ? targetMs : Number.NaN;
+}
+
+function readTargetNotifyBeforeUnit() {
+  return elements.targetNotifyBeforeUnit.value === 'days' ? 'days' : 'hours';
+}
+
+function readTargetNotifyBeforeMs() {
+  const unit = readTargetNotifyBeforeUnit();
+  const maxAmount = unit === 'days' ? 3650 : 3650 * 24;
+  const amount = clampNumber(elements.targetNotifyBeforeInput.value, 0, maxAmount);
+  elements.targetNotifyBeforeInput.value = String(amount);
+
+  return amount * (unit === 'days' ? 24 * 60 * 60 * 1000 : 60 * 60 * 1000);
+}
+
+function getTargetNotifyBeforeAmount(countdown = {}) {
+  const unit = countdown.targetNotifyBeforeUnit === 'days' ? 'days' : 'hours';
+  const unitMs = unit === 'days' ? 24 * 60 * 60 * 1000 : 60 * 60 * 1000;
+
+  return Math.floor((Number(countdown.targetNotifyBeforeMs) || 0) / unitMs);
+}
+
+function syncTargetNotifyBeforeLimit() {
+  elements.targetNotifyBeforeInput.max = readTargetNotifyBeforeUnit() === 'days' ? '3650' : '87600';
 }
 
 function syncPomodoroInputs(settings = {}) {
-  elements.pomodoroFocusInput.value = String(settings.focusMinutes ?? 25);
-  elements.pomodoroShortInput.value = String(settings.shortBreakMinutes ?? 5);
-  elements.pomodoroLongInput.value = String(settings.longBreakMinutes ?? 15);
-  elements.pomodoroLongEveryInput.value = String(settings.longBreakEvery ?? 4);
+  setInputValue(elements.pomodoroFocusInput, settings.focusMinutes ?? 25);
+  setInputValue(elements.pomodoroShortInput, settings.shortBreakMinutes ?? 5);
+  setInputValue(elements.pomodoroLongInput, settings.longBreakMinutes ?? 15);
+  setInputValue(elements.pomodoroLongEveryInput, settings.longBreakEvery ?? 4);
 }
 
 function readPomodoroConfig() {
@@ -219,13 +271,17 @@ function renderCountdown(state) {
 
   if (!countdown.running) {
     const duration = splitDuration(countdown.durationMs || countdown.remainingMs || 0);
-    elements.hoursInput.value = String(duration.hours);
-    elements.minutesInput.value = String(duration.minutes);
-    elements.secondsInput.value = String(duration.seconds);
-    elements.targetInput.value = countdown.targetMs > 0
+    setInputValue(elements.hoursInput, duration.hours);
+    setInputValue(elements.minutesInput, duration.minutes);
+    setInputValue(elements.secondsInput, duration.seconds);
+    setInputValue(elements.targetInput, countdown.targetMs > 0
       ? toLocalDateTimeValue(new Date(countdown.targetMs))
-      : elements.targetInput.value || toLocalDateTimeValue(new Date(Date.now() + 60 * 60 * 1000));
+      : elements.targetInput.value || toLocalDateTimeValue(new Date(Date.now() + 60 * 60 * 1000)));
   }
+
+  setInputValue(elements.targetNotifyBeforeInput, getTargetNotifyBeforeAmount(countdown));
+  setInputValue(elements.targetNotifyBeforeUnit, countdown.targetNotifyBeforeUnit === 'days' ? 'days' : 'hours');
+  syncTargetNotifyBeforeLimit();
 }
 
 function renderStopwatch(state) {
@@ -332,12 +388,26 @@ function updatePomodoroSettings() {
   shell?.updateSettings?.({ pomodoro: readPomodoroConfig() })?.catch?.(() => {});
 }
 
-function configureCountdown() {
-  return shell?.countdownConfigure?.({
+function readCountdownOptions(requireTarget = false) {
+  const targetMs = readTargetMs();
+  const options = {
     mode: currentState?.countdown?.mode || 'duration',
     durationMs: readDurationMs(),
-    targetMs: readTargetMs()
-  });
+    targetNotifyBeforeMs: readTargetNotifyBeforeMs(),
+    targetNotifyBeforeUnit: readTargetNotifyBeforeUnit()
+  };
+
+  if (Number.isFinite(targetMs)) {
+    options.targetMs = targetMs;
+  } else if (requireTarget) {
+    options.targetMs = 0;
+  }
+
+  return options;
+}
+
+function configureCountdown() {
+  return shell?.countdownConfigure?.(readCountdownOptions(false));
 }
 
 async function addReminder() {
@@ -369,6 +439,20 @@ function bindEvents() {
     elements.pomodoroFocusInput,
     elements.pomodoroShortInput,
     elements.pomodoroLongInput,
+    elements.pomodoroLongEveryInput,
+    elements.hoursInput,
+    elements.minutesInput,
+    elements.secondsInput,
+    elements.targetInput,
+    elements.targetNotifyBeforeInput,
+    elements.targetNotifyBeforeUnit,
+    elements.reminderTimeInput
+  ].forEach(trackEditableField);
+
+  [
+    elements.pomodoroFocusInput,
+    elements.pomodoroShortInput,
+    elements.pomodoroLongInput,
     elements.pomodoroLongEveryInput
   ].forEach((input) => {
     input.addEventListener('change', updatePomodoroSettings);
@@ -394,11 +478,16 @@ function bindEvents() {
     });
   });
 
-  elements.countdownStart.addEventListener('click', () => shell?.countdownStart?.({
-    mode: currentState?.countdown?.mode || 'duration',
-    durationMs: readDurationMs(),
-    targetMs: readTargetMs()
-  }));
+  [elements.targetNotifyBeforeInput, elements.targetNotifyBeforeUnit].forEach((input) => {
+    input.addEventListener('change', () => {
+      syncTargetNotifyBeforeLimit();
+      configureCountdown()?.catch?.(() => {});
+    });
+  });
+
+  elements.countdownStart.addEventListener('click', () => shell?.countdownStart?.(
+    readCountdownOptions((currentState?.countdown?.mode || 'duration') === 'target')
+  ));
   elements.countdownPause.addEventListener('click', () => shell?.countdownPause?.());
   elements.countdownReset.addEventListener('click', () => shell?.countdownReset?.());
   elements.stopwatchStart.addEventListener('click', () => shell?.stopwatchStart?.());

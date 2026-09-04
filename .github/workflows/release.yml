@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag, for example v1.0.2'
+        description: 'Release tag, for example v1.1.0'
         required: true
-        default: 'v1.0.2'
+        default: 'v1.1.0'
 
 permissions:
   contents: write
@@ -44,6 +44,22 @@ jobs:
           node-version: 22
           cache: npm
 
+      - name: Validate release version
+        shell: bash
+        env:
+          DISPATCH_TAG: ${{ inputs.tag }}
+        run: |
+          release_tag="$GITHUB_REF_NAME"
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            release_tag="$DISPATCH_TAG"
+          fi
+
+          package_version="$(node -p "require('./package.json').version")"
+          if [ "v${package_version}" != "$release_tag" ]; then
+            echo "Release tag ${release_tag} does not match package version v${package_version}." >&2
+            exit 1
+          fi
+
       - name: Install Linux packaging tools
         if: runner.os == 'Linux'
         run: |
@@ -64,6 +80,9 @@ jobs:
             sleep $((attempt * 20))
           done
           npm ci --fetch-retries=5 --fetch-retry-mintimeout=20000 --fetch-retry-maxtimeout=120000
+
+      - name: Run tests
+        run: npm test
 
       - name: Build installers
         run: npm run ${{ matrix.script }}
@@ -144,8 +163,14 @@ jobs:
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release upload "$RELEASE_TAG" "${files[@]}" --clobber
           else
+            release_notes=(--generate-notes)
+            notes_file="docs/releases/${RELEASE_TAG}.md"
+            if [ -f "$notes_file" ]; then
+              release_notes=(--notes-file "$notes_file")
+            fi
+
             gh release create "$RELEASE_TAG" "${files[@]}" \
               --target "$GITHUB_SHA" \
               --title "Elegant Clock ${RELEASE_TAG}" \
-              --notes "Elegant Clock desktop release. Assets include Windows .exe/.msi, Linux .deb/.dpkg/.rpm/.pkg.tar.zst packages, and SHA256SUMS.txt checksums."
+              "${release_notes[@]}"
           fi

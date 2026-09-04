@@ -3,6 +3,8 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('elegantClock', {
   getVersion: () => ipcRenderer.invoke('app:get-version'),
   getAboutInfo: () => ipcRenderer.invoke('app:get-about-info'),
+  getUpdateInfo: () => ipcRenderer.invoke('app:get-update-info'),
+  startProxyUpdate: () => ipcRenderer.invoke('app:start-proxy-update'),
   openAbout: () => ipcRenderer.invoke('app:open-about'),
   openSettings: () => ipcRenderer.invoke('app:open-settings'),
   openTools: () => ipcRenderer.invoke('app:open-tools'),
@@ -64,6 +66,15 @@ contextBridge.exposeInMainWorld('elegantClock', {
     const listener = (_event, payload) => callback(payload);
     ipcRenderer.on('alert:play', listener);
     return () => ipcRenderer.removeListener('alert:play', listener);
+  },
+  onUpdateProgress: (callback) => {
+    if (typeof callback !== 'function') {
+      return () => {};
+    }
+
+    const listener = (_event, progress) => callback(progress);
+    ipcRenderer.on('update:progress', listener);
+    return () => ipcRenderer.removeListener('update:progress', listener);
   },
   showNotification: (options) => ipcRenderer.invoke('notification:show', {
     title: options?.title,

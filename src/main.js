@@ -1,19 +1,28 @@
-const { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, Notification, screen, shell: electronShell, Tray } = require('electron');
-const { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } = require('fs');
+const { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, net, Notification, screen, shell: electronShell, Tray } = require('electron');
+const { createHash } = require('crypto');
+const { createWriteStream, existsSync, mkdirSync, promises: fsPromises, readFileSync, unlinkSync, writeFileSync } = require('fs');
 const os = require('os');
 const path = require('path');
+const { Readable, Transform } = require('stream');
+const { pipeline } = require('stream/promises');
 const { pathToFileURL } = require('url');
 const packageInfo = require('../package.json');
+const { createUpdateInfo, fetchLatestRelease, getProxyDownloadUrl } = require('./update-checker');
 
 let mainWindow;
 let aboutWindow;
 let settingsWindow;
 let toolsWindow;
+let updateWindow;
 let tray;
 let isQuitting = false;
 let compactMode = false;
 let stateSaveTimer;
 let timerEngine;
+let latestUpdateInfo;
+let updateCheckStarted = false;
+let updateDownloadPromise;
+let updateDownloadAbortController;
 
 const defaultWindowSize = {
   width: 560,
@@ -36,6 +45,8 @@ const autostartDesktopFileName = 'elegant-clock.desktop';
 const windowsRunEntryName = 'Elegant Clock';
 const autostartArgs = ['--autostart'];
 const maxTargetNotifyBeforeMs = 3650 * 24 * 60 * 60 * 1000;
+const updateCheckTimeoutMs = 12000;
+const updateProgressIntervalMs = 120;
 
 const defaultSettings = {
   transparent: true,
@@ -955,6 +966,220 @@ function getAboutInfo() {
   };
 }
 
+function getLinuxDistributionIds() {
+  if (process.platform !== 'linux') {
+    return [];
+  }
+
+  try {
+    const values = readFileSync('/etc/os-release', 'utf8')
+      .split(/\r?\n/)
+      .map((line) => line.match(/^(?:ID|ID_LIKE)=(.*)$/)?.[1])
+      .filter(Boolean)
+      .flatMap((value) => value.replace(/^["']|["']$/g, '').split(/\s+/))
+      .map((value) => value.trim().toLowerCase())
+      .filter((value) => /^[a-z0-9._-]+$/.test(value));
+
+    return [...new Set(values)];
+  } catch {
+    return [];
+  }
+}
+
+function sendUpdateProgress(progress) {
+  if (updateWindow && !updateWindow.isDestroyed()) {
+    updateWindow.webContents.send('update:progress', progress);
+  }
+}
+
+async function checkForUpdatesOnLaunch() {
+  if (updateCheckStarted) {
+    return;
+  }
+
+  updateCheckStarted = true;
+  const abortController = new AbortController();
+  const timeout = setTimeout(() => abortController.abort(), updateCheckTimeoutMs);
+  timeout.unref?.();
+
+  try {
+    const release = await fetchLatestRelease((...args) => net.fetch(...args), abortController.signal);
+    latestUpdateInfo = createUpdateInfo(
+      release,
+      app.getVersion(),
+      process.platform,
+      process.arch,
+      getLinuxDistributionIds()
+    );
+
+    if (latestUpdateInfo && !isQuitting) {
+      createUpdateWindow();
+    }
+  } catch {
+    // Update checks must not delay or interrupt normal startup.
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function createDownloadMonitor(asset) {
+  const hash = createHash('sha256');
+  let downloadedBytes = 0;
+  let lastProgressAt = 0;
+
+  const stream = new Transform({
+    transform(chunk, _encoding, callback) {
+      const nextDownloadedBytes = downloadedBytes + chunk.length;
+      if (nextDownloadedBytes > asset.size) {
+        callback(new Error('下载文件大小与发布信息不一致'));
+        return;
+      }
+
+      downloadedBytes = nextDownloadedBytes;
+      hash.update(chunk);
+
+      const now = Date.now();
+      if (now - lastProgressAt >= updateProgressIntervalMs || downloadedBytes === asset.size) {
+        lastProgressAt = now;
+        sendUpdateProgress({
+          phase: 'downloading',
+          message: `正在下载 ${asset.name}`,
+          percent: (downloadedBytes / asset.size) * 100
+        });
+      }
+
+      callback(null, chunk);
+    }
+  });
+
+  return {
+    stream,
+    getDownloadedBytes: () => downloadedBytes,
+    getSha256: () => hash.digest('hex')
+  };
+}
+
+async function launchDownloadedUpdate(downloadPath) {
+  saveAppStateNow();
+  const errorMessage = await electronShell.openPath(downloadPath);
+
+  if (errorMessage) {
+    throw new Error(`无法启动系统安装程序：${errorMessage}`);
+  }
+
+  sendUpdateProgress({
+    phase: 'complete',
+    message: '安装程序已启动，Elegant Clock 即将退出'
+  });
+
+  const quitTimer = setTimeout(() => {
+    isQuitting = true;
+    app.quit();
+  }, 1200);
+  quitTimer.unref?.();
+}
+
+async function downloadAndLaunchUpdate(asset, signal) {
+  const downloadDirectory = await fsPromises.mkdtemp(path.join(app.getPath('temp'), 'elegant-clock-update-'));
+  const downloadPath = path.join(downloadDirectory, asset.name);
+
+  try {
+    sendUpdateProgress({
+      phase: 'connecting',
+      message: '正在连接 ghfast.top…'
+    });
+
+    const response = await net.fetch(getProxyDownloadUrl(asset.downloadUrl), {
+      method: 'GET',
+      cache: 'no-store',
+      redirect: 'follow',
+      signal
+    });
+
+    if (!response.ok || !response.body) {
+      throw new Error(`代理下载失败（HTTP ${response.status}）`);
+    }
+
+    sendUpdateProgress({
+      phase: 'downloading',
+      message: `正在下载 ${asset.name}`,
+      percent: 0
+    });
+
+    const monitor = createDownloadMonitor(asset);
+    await pipeline(
+      Readable.fromWeb(response.body),
+      monitor.stream,
+      createWriteStream(downloadPath, { flags: 'wx', mode: 0o600 }),
+      { signal }
+    );
+
+    sendUpdateProgress({
+      phase: 'verifying',
+      message: '正在校验安装包完整性…'
+    });
+
+    if (monitor.getDownloadedBytes() !== asset.size) {
+      throw new Error('下载文件大小与发布信息不一致');
+    }
+
+    if (monitor.getSha256() !== asset.sha256) {
+      throw new Error('安装包 SHA-256 校验失败，已阻止运行');
+    }
+
+    if (signal.aborted) {
+      throw new Error('下载已取消');
+    }
+
+    sendUpdateProgress({
+      phase: 'launching',
+      message: '校验通过，正在启动系统安装程序…'
+    });
+    await launchDownloadedUpdate(downloadPath);
+  } catch (error) {
+    await fsPromises.rm(downloadDirectory, { recursive: true, force: true }).catch(() => {});
+    throw error;
+  }
+}
+
+async function startProxyUpdate() {
+  if (updateDownloadPromise) {
+    return {
+      ok: false,
+      error: '更新包已在下载中'
+    };
+  }
+
+  const asset = latestUpdateInfo?.asset;
+  if (!asset) {
+    return {
+      ok: false,
+      error: '当前平台没有可校验的安装包，请前往发布页下载'
+    };
+  }
+
+  const abortController = new AbortController();
+  updateDownloadAbortController = abortController;
+  const operation = downloadAndLaunchUpdate(asset, abortController.signal);
+  updateDownloadPromise = operation;
+
+  try {
+    await operation;
+    return { ok: true };
+  } catch (error) {
+    const message = abortController.signal.aborted
+      ? '下载已取消'
+      : error?.message || '代理更新失败，请前往发布页手动下载';
+    sendUpdateProgress({ phase: 'error', message });
+    return { ok: false, error: message };
+  } finally {
+    if (updateDownloadPromise === operation) {
+      updateDownloadPromise = undefined;
+      updateDownloadAbortController = undefined;
+    }
+  }
+}
+
 function openExternalUrl(value) {
   const url = new URL(String(value));
 
@@ -1400,6 +1625,65 @@ function createAboutWindow() {
   aboutWindow.loadFile(aboutFilePath);
 }
 
+function createUpdateWindow() {
+  if (!latestUpdateInfo) {
+    return null;
+  }
+
+  if (updateWindow && !updateWindow.isDestroyed()) {
+    updateWindow.show();
+    updateWindow.focus();
+    return updateWindow;
+  }
+
+  const updateFilePath = path.join(__dirname, 'update.html');
+  const updateFileUrl = pathToFileURL(updateFilePath).toString();
+
+  updateWindow = new BrowserWindow({
+    width: 620,
+    height: 680,
+    minWidth: 460,
+    minHeight: 520,
+    title: 'Elegant Clock 更新',
+    frame: true,
+    backgroundColor: '#17191c',
+    icon: getIconPath(),
+    show: false,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true
+    }
+  });
+
+  // This window deliberately has no parent, so main-window compacting and hiding cannot affect it.
+  updateWindow.setMenuBarVisibility(false);
+  updateWindow.once('ready-to-show', () => {
+    updateWindow?.show();
+    updateWindow?.focus();
+  });
+  updateWindow.on('closed', () => {
+    updateWindow = null;
+    updateDownloadAbortController?.abort();
+  });
+  updateWindow.webContents.setWindowOpenHandler(({ url }) => {
+    openExternalUrlSafely(url);
+    return { action: 'deny' };
+  });
+  updateWindow.webContents.on('will-navigate', (event, url) => {
+    if (url === updateFileUrl) {
+      return;
+    }
+
+    event.preventDefault();
+    openExternalUrlSafely(url);
+  });
+  updateWindow.loadFile(updateFilePath);
+
+  return updateWindow;
+}
+
 if (!gotSingleInstanceLock) {
   app.quit();
 } else {
@@ -1412,6 +1696,7 @@ if (!gotSingleInstanceLock) {
     createWindow();
     createTray();
     startTimerEngine();
+    void checkForUpdatesOnLaunch();
 
     app.on('activate', () => {
       requestOrCreateFullUi();
@@ -1433,6 +1718,19 @@ app.on('window-all-closed', () => {
 ipcMain.handle('app:get-version', () => app.getVersion());
 
 ipcMain.handle('app:get-about-info', () => getAboutInfo());
+
+ipcMain.handle('app:get-update-info', () => latestUpdateInfo ? clone(latestUpdateInfo) : null);
+
+ipcMain.handle('app:start-proxy-update', (event) => {
+  if (getWindowFromEvent(event) !== updateWindow) {
+    return {
+      ok: false,
+      error: '代理更新只能从版本提示窗口启动'
+    };
+  }
+
+  return startProxyUpdate();
+});
 
 ipcMain.handle('app:open-about', () => {
   createAboutWindow();

@@ -1,4 +1,17 @@
-const { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, net, Notification, screen, shell: electronShell, Tray } = require('electron');
+const {
+  app,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  Menu,
+  nativeImage,
+  net,
+  Notification,
+  screen,
+  shell: electronShell,
+  Tray,
+  utilityProcess
+} = require('electron');
 const { createHash } = require('crypto');
 const { createWriteStream, existsSync, mkdirSync, promises: fsPromises, readFileSync, unlinkSync, writeFileSync } = require('fs');
 const os = require('os');
@@ -23,6 +36,11 @@ let latestUpdateInfo;
 let updateCheckStarted = false;
 let updateDownloadPromise;
 let updateDownloadAbortController;
+let watchdogProcess;
+let watchdogReady = false;
+let watchdogHeartbeatPending = false;
+let watchdogRestartTimer;
+let rendererRecoveryTimer;
 
 const defaultWindowSize = {
   width: 560,
@@ -47,6 +65,10 @@ const autostartArgs = ['--autostart'];
 const maxTargetNotifyBeforeMs = 3650 * 24 * 60 * 60 * 1000;
 const updateCheckTimeoutMs = 12000;
 const updateProgressIntervalMs = 120;
+const watchdogRestartDelayMs = 30_000;
+const rendererRecoveryLockMs = 30_000;
+const watchdogSmokeTestTimeoutMs = 15_000;
+const watchdogSmokeTestMode = process.argv.includes('--watchdog-smoke-test');
 
 const defaultSettings = {
   transparent: true,
@@ -1452,6 +1474,232 @@ function createRingtonePayload(filePath) {
   };
 }
 
+function getWatchdogScriptPath() {
+  if (app.isPackaged) {
+    return path.join(process.resourcesPath, 'watchdog', 'watchdog.js');
+  }
+
+  return path.join(__dirname, 'watchdog.js');
+}
+
+function shouldMonitorMainRenderer() {
+  return Boolean(
+    mainWindow
+    && !mainWindow.isDestroyed()
+    && mainWindow.isVisible()
+    && !mainWindow.isMinimized()
+  );
+}
+
+function clearRendererRecoveryLock() {
+  if (rendererRecoveryTimer) {
+    clearTimeout(rendererRecoveryTimer);
+    rendererRecoveryTimer = undefined;
+  }
+}
+
+function recoverMainRendererSilently() {
+  if (isQuitting || rendererRecoveryTimer || !shouldMonitorMainRenderer()) {
+    return false;
+  }
+
+  const contents = mainWindow.webContents;
+  if (contents.isDestroyed() || contents.isLoadingMainFrame()) {
+    return false;
+  }
+
+  rendererRecoveryTimer = setTimeout(clearRendererRecoveryLock, rendererRecoveryLockMs);
+  rendererRecoveryTimer.unref?.();
+
+  try {
+    contents.reloadIgnoringCache();
+    return true;
+  } catch {
+    clearRendererRecoveryLock();
+    return false;
+  }
+}
+
+function syncWatchdogMonitoringState() {
+  if (!watchdogProcess || !watchdogReady) {
+    return;
+  }
+
+  try {
+    watchdogProcess.postMessage({
+      type: 'renderer-monitoring',
+      enabled: shouldMonitorMainRenderer()
+    });
+  } catch {
+    watchdogReady = false;
+  }
+}
+
+function forwardRendererHeartbeat() {
+  if (!shouldMonitorMainRenderer()) {
+    watchdogHeartbeatPending = false;
+    return;
+  }
+
+  watchdogHeartbeatPending = true;
+
+  if (!watchdogProcess || !watchdogReady) {
+    return;
+  }
+
+  try {
+    watchdogProcess.postMessage({ type: 'renderer-heartbeat' });
+    watchdogHeartbeatPending = false;
+  } catch {
+    watchdogReady = false;
+  }
+}
+
+function scheduleWatchdogRestart() {
+  if (isQuitting || watchdogRestartTimer) {
+    return;
+  }
+
+  watchdogRestartTimer = setTimeout(() => {
+    watchdogRestartTimer = undefined;
+    startWatchdogProcess();
+  }, watchdogRestartDelayMs);
+  watchdogRestartTimer.unref?.();
+}
+
+function startWatchdogProcess() {
+  if (isQuitting || watchdogProcess) {
+    return;
+  }
+
+  let child;
+  try {
+    child = utilityProcess.fork(getWatchdogScriptPath(), [], {
+      serviceName: 'Elegant Clock Watchdog',
+      stdio: 'ignore'
+    });
+  } catch {
+    scheduleWatchdogRestart();
+    return;
+  }
+
+  watchdogProcess = child;
+  watchdogReady = false;
+
+  child.on('message', (message) => {
+    if (watchdogProcess !== child) {
+      return;
+    }
+
+    if (message?.type === 'watchdog-ready') {
+      watchdogReady = true;
+      syncWatchdogMonitoringState();
+      if (watchdogHeartbeatPending) {
+        forwardRendererHeartbeat();
+      }
+      return;
+    }
+
+    if (message?.type === 'renderer-stalled') {
+      recoverMainRendererSilently();
+    }
+  });
+
+  child.on('error', (type, location) => {
+    console.error(`Watchdog process error (${type}) at ${location}`);
+  });
+
+  child.once('exit', () => {
+    if (watchdogProcess !== child) {
+      return;
+    }
+
+    watchdogProcess = undefined;
+    watchdogReady = false;
+    scheduleWatchdogRestart();
+  });
+}
+
+function stopWatchdogProcess() {
+  if (watchdogRestartTimer) {
+    clearTimeout(watchdogRestartTimer);
+    watchdogRestartTimer = undefined;
+  }
+
+  clearRendererRecoveryLock();
+  watchdogReady = false;
+  watchdogHeartbeatPending = false;
+
+  const child = watchdogProcess;
+  watchdogProcess = undefined;
+  if (!child) {
+    return;
+  }
+
+  try {
+    child.postMessage({ type: 'shutdown' });
+  } catch {
+    child.kill();
+  }
+}
+
+function runWatchdogSmokeTest() {
+  let child;
+  let watchdogResponded = false;
+  let watchdogFailed = false;
+  let finished = false;
+
+  const finish = (exitCode) => {
+    if (finished) {
+      return;
+    }
+
+    finished = true;
+    clearTimeout(timeout);
+    app.exit(exitCode);
+  };
+
+  const timeout = setTimeout(() => {
+    child?.kill();
+    console.error('Packaged watchdog smoke test timed out.');
+    finish(1);
+  }, watchdogSmokeTestTimeoutMs);
+
+  try {
+    child = utilityProcess.fork(getWatchdogScriptPath(), [], {
+      serviceName: 'Elegant Clock Watchdog Smoke Test',
+      stdio: 'ignore'
+    });
+  } catch (error) {
+    console.error('Unable to start the packaged watchdog process.', error);
+    finish(1);
+    return;
+  }
+
+  child.on('message', (message) => {
+    if (message?.type !== 'watchdog-ready') {
+      return;
+    }
+
+    watchdogResponded = true;
+    try {
+      child.postMessage({ type: 'shutdown' });
+    } catch (error) {
+      console.error('Unable to communicate with the packaged watchdog process.', error);
+      finish(1);
+    }
+  });
+
+  child.on('error', (type, location) => {
+    watchdogFailed = true;
+    console.error(`Packaged watchdog process error (${type}) at ${location}`);
+  });
+
+  child.once('exit', (code) => {
+    finish(watchdogResponded && !watchdogFailed && code === 0 ? 0 : 1);
+  });
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: defaultWindowSize.width,
@@ -1469,7 +1717,8 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true
+      sandbox: true,
+      backgroundThrottling: false
     }
   });
 
@@ -1491,7 +1740,12 @@ function createWindow() {
   });
   mainWindow.on('closed', () => {
     mainWindow = null;
+    syncWatchdogMonitoringState();
   });
+  mainWindow.on('show', syncWatchdogMonitoringState);
+  mainWindow.on('hide', syncWatchdogMonitoringState);
+  mainWindow.on('minimize', syncWatchdogMonitoringState);
+  mainWindow.on('restore', syncWatchdogMonitoringState);
 
   mainWindow.loadFile(path.join(__dirname, 'index.html'));
 }
@@ -1692,8 +1946,14 @@ if (!gotSingleInstanceLock) {
   });
 
   app.whenReady().then(() => {
+    if (watchdogSmokeTestMode) {
+      runWatchdogSmokeTest();
+      return;
+    }
+
     loadAppState();
     createWindow();
+    startWatchdogProcess();
     createTray();
     startTimerEngine();
     void checkForUpdatesOnLaunch();
@@ -1706,6 +1966,7 @@ if (!gotSingleInstanceLock) {
 
 app.on('before-quit', () => {
   isQuitting = true;
+  stopWatchdogProcess();
   saveAppStateNow();
 });
 
@@ -1847,6 +2108,16 @@ ipcMain.on('window:toggle-maximize', (event) => {
 });
 
 ipcMain.handle('window:set-compact-mode', (event, enabled) => setWindowCompactMode(getWindowFromEvent(event), enabled));
+
+ipcMain.handle('window:get-compact-mode', (event) => (
+  getWindowFromEvent(event) === mainWindow && compactMode
+));
+
+ipcMain.on('watchdog:renderer-heartbeat', (event) => {
+  if (getWindowFromEvent(event) === mainWindow) {
+    forwardRendererHeartbeat();
+  }
+});
 
 ipcMain.on('window:move-by', (event, positionDelta = {}) => {
   const window = getWindowFromEvent(event);

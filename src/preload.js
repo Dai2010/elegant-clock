@@ -35,7 +35,9 @@ contextBridge.exposeInMainWorld('elegantClock', {
   toggleMaximize: () => ipcRenderer.send('window:toggle-maximize'),
   close: () => ipcRenderer.send('window:close'),
   setAlwaysOnTop: (enabled) => ipcRenderer.send('window:set-always-on-top', Boolean(enabled)),
+  getCompactMode: () => ipcRenderer.invoke('window:get-compact-mode'),
   setCompactMode: (enabled) => ipcRenderer.invoke('window:set-compact-mode', Boolean(enabled)),
+  reportRendererHeartbeat: () => ipcRenderer.send('watchdog:renderer-heartbeat'),
   moveWindowBy: (deltaX, deltaY) => ipcRenderer.send('window:move-by', {
     deltaX: Number(deltaX) || 0,
     deltaY: Number(deltaY) || 0

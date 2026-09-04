@@ -16,9 +16,11 @@ const elements = {
 let audioContext;
 let idleTimer;
 let latestState;
+let lastHeartbeatAt = Number.NEGATIVE_INFINITY;
 
 const idleDelayMs = 5000;
 const compactClickMaxMove = 5;
+const heartbeatIntervalMs = 10_000;
 
 const compactUi = {
   active: false,
@@ -109,6 +111,20 @@ function updateClock() {
     const remainingMs = Math.max(0, latestState.countdown.deadlineMs - Date.now());
     elements.countdownSummary.textContent = `倒计时 ${formatDuration(remainingMs)} · 进行中`;
   }
+
+  const heartbeatTime = performance.now();
+  if (heartbeatTime - lastHeartbeatAt >= heartbeatIntervalMs) {
+    lastHeartbeatAt = heartbeatTime;
+    shell?.reportRendererHeartbeat?.();
+  }
+}
+
+function scheduleClockUpdate() {
+  window.requestAnimationFrame(() => {
+    updateClock();
+    const nextSecondDelayMs = 1000 - (Date.now() % 1000) + 20;
+    window.setTimeout(scheduleClockUpdate, nextSecondDelayMs);
+  });
 }
 
 function playFallbackTone() {
@@ -161,20 +177,26 @@ function scheduleIdleMode() {
   }, idleDelayMs);
 }
 
+function applyCompactUiState(enabled) {
+  compactUi.active = enabled;
+  document.body.classList.toggle('compact-mode', enabled);
+  elements.clockPanel.setAttribute(
+    'aria-label',
+    enabled ? '紧凑时钟，点击恢复完整窗口，拖动可移动位置' : '当前时间'
+  );
+}
+
 async function enterCompactMode() {
   if (compactUi.active || document.hidden) {
     return;
   }
 
-  compactUi.active = true;
-  document.body.classList.add('compact-mode');
-  elements.clockPanel.setAttribute('aria-label', '紧凑时钟，点击恢复完整窗口，拖动可移动位置');
+  applyCompactUiState(true);
 
   try {
     await shell?.setCompactMode?.(true);
   } catch {
-    document.body.classList.remove('compact-mode');
-    compactUi.active = false;
+    applyCompactUiState(false);
   }
 }
 
@@ -183,9 +205,7 @@ async function exitCompactMode() {
     return;
   }
 
-  compactUi.active = false;
-  document.body.classList.remove('compact-mode');
-  elements.clockPanel.setAttribute('aria-label', '当前时间');
+  applyCompactUiState(false);
 
   try {
     await shell?.setCompactMode?.(false);
@@ -300,9 +320,12 @@ function bindEvents() {
 async function init() {
   bindEvents();
   renderState(await shell?.getState?.());
-  updateClock();
-  scheduleIdleMode();
-  window.setInterval(updateClock, 200);
+  applyCompactUiState(Boolean(await shell?.getCompactMode?.()));
+  scheduleClockUpdate();
+
+  if (!compactUi.active) {
+    scheduleIdleMode();
+  }
 }
 
 init();

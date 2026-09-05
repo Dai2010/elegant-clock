@@ -13,11 +13,16 @@ const elements = {
   fontSizeValue: document.querySelector('#font-size-value'),
   fontColorInput: document.querySelector('#font-color-input'),
   backgroundColorInput: document.querySelector('#background-color-input'),
+  backgroundColorHexInput: document.querySelector('#background-color-hex-input'),
+  backgroundColorError: document.querySelector('#background-color-error'),
   ringtoneLabel: document.querySelector('#ringtone-label'),
   ringtoneChoose: document.querySelector('#ringtone-choose'),
   ringtoneTest: document.querySelector('#ringtone-test'),
   ringtoneStop: document.querySelector('#ringtone-stop'),
   ringtoneDefault: document.querySelector('#ringtone-default'),
+  currentVersion: document.querySelector('#current-version'),
+  updateCheckStatus: document.querySelector('#update-check-status'),
+  updateCheckButton: document.querySelector('#update-check-button'),
   aboutOpen: document.querySelector('#about-open')
 };
 
@@ -28,6 +33,12 @@ let settingsSignature = '';
 
 function normalizeColor(value, fallback) {
   return typeof value === 'string' && /^#[\da-f]{6}$/i.test(value) ? value : fallback;
+}
+
+function parseHexColor(value) {
+  const input = String(value || '').trim();
+  const candidate = input.startsWith('#') ? input : `#${input}`;
+  return /^#[\da-f]{6}$/i.test(candidate) ? candidate.toUpperCase() : null;
 }
 
 function hexToRgbParts(hex) {
@@ -58,7 +69,11 @@ function renderSettings(settings = {}) {
   elements.fontSizeInput.value = String(settings.fontSize ?? 82);
   elements.fontSizeValue.textContent = `${settings.fontSize ?? 82}px`;
   elements.fontColorInput.value = normalizeColor(settings.fontColor, '#f8fbff');
-  elements.backgroundColorInput.value = normalizeColor(settings.backgroundColor, '#101623');
+  const backgroundColor = normalizeColor(settings.backgroundColor, '#101623');
+  elements.backgroundColorInput.value = backgroundColor;
+  elements.backgroundColorHexInput.value = backgroundColor.toUpperCase();
+  elements.backgroundColorHexInput.removeAttribute('aria-invalid');
+  elements.backgroundColorError.hidden = true;
   elements.ringtoneLabel.textContent = settings.ringtone?.type === 'custom'
     ? `自定义：${settings.ringtone.name || '自定义铃声'}`
     : '默认：ringtone_default.mp3';
@@ -76,6 +91,68 @@ function renderState(state) {
 
 function updateSettings(partialSettings) {
   shell?.updateSettings?.(partialSettings)?.catch?.(() => {});
+}
+
+function renderBackgroundColorValidation(color) {
+  const valid = Boolean(color);
+  if (valid) {
+    elements.backgroundColorHexInput.removeAttribute('aria-invalid');
+  } else {
+    elements.backgroundColorHexInput.setAttribute('aria-invalid', 'true');
+  }
+  elements.backgroundColorError.hidden = valid;
+}
+
+function updateBackgroundColorFromText() {
+  const color = parseHexColor(elements.backgroundColorHexInput.value);
+  renderBackgroundColorValidation(color);
+
+  if (!color) {
+    return;
+  }
+
+  elements.backgroundColorHexInput.value = color;
+  elements.backgroundColorInput.value = color;
+  updateSettings({ backgroundColor: color });
+}
+
+function restoreBackgroundColorInput() {
+  const color = normalizeColor(currentState?.settings?.backgroundColor, '#101623');
+  elements.backgroundColorInput.value = color;
+  elements.backgroundColorHexInput.value = color.toUpperCase();
+  renderBackgroundColorValidation(color);
+}
+
+function setUpdateCheckStatus(message, state = '') {
+  elements.updateCheckStatus.textContent = message;
+  if (state) {
+    elements.updateCheckStatus.dataset.state = state;
+  } else {
+    delete elements.updateCheckStatus.dataset.state;
+  }
+}
+
+async function checkForUpdates() {
+  elements.updateCheckButton.disabled = true;
+  setUpdateCheckStatus('正在检查…');
+
+  try {
+    const result = await shell?.checkForUpdates?.();
+    if (!result?.ok) {
+      throw new Error(result?.error || '检查更新失败');
+    }
+
+    elements.currentVersion.textContent = `当前版本 v${result.currentVersion}`;
+    if (result.status === 'update-available') {
+      setUpdateCheckStatus(`发现 v${result.latestVersion}，已打开更新窗口`, 'available');
+    } else {
+      setUpdateCheckStatus('已是最新版本');
+    }
+  } catch (error) {
+    setUpdateCheckStatus(error?.message || '检查更新失败', 'error');
+  } finally {
+    elements.updateCheckButton.disabled = false;
+  }
 }
 
 function renderAutostartInfo(info) {
@@ -212,21 +289,43 @@ function bindEvents() {
     updateSettings({ fontSize: elements.fontSizeInput.value });
   });
   elements.fontColorInput.addEventListener('input', () => updateSettings({ fontColor: elements.fontColorInput.value }));
-  elements.backgroundColorInput.addEventListener('input', () => updateSettings({ backgroundColor: elements.backgroundColorInput.value }));
+  elements.backgroundColorInput.addEventListener('input', () => {
+    const color = elements.backgroundColorInput.value.toUpperCase();
+    elements.backgroundColorHexInput.value = color;
+    renderBackgroundColorValidation(color);
+    updateSettings({ backgroundColor: color });
+  });
+  elements.backgroundColorHexInput.addEventListener('input', updateBackgroundColorFromText);
+  elements.backgroundColorHexInput.addEventListener('change', () => {
+    if (!parseHexColor(elements.backgroundColorHexInput.value)) {
+      restoreBackgroundColorInput();
+    }
+  });
+  elements.backgroundColorHexInput.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      elements.backgroundColorHexInput.blur();
+    }
+  });
   elements.ringtoneChoose.addEventListener('click', () => chooseRingtone().catch(() => {
     elements.ringtoneLabel.textContent = '选择铃声失败';
   }));
   elements.ringtoneTest.addEventListener('click', playRingtonePreview);
   elements.ringtoneStop.addEventListener('click', stopRingtonePreview);
   elements.ringtoneDefault.addEventListener('click', () => useDefaultRingtone().catch(() => {}));
+  elements.updateCheckButton.addEventListener('click', checkForUpdates);
   elements.aboutOpen.addEventListener('click', () => shell?.openAbout?.()?.catch?.(() => {}));
   shell?.onStateChanged?.(renderState);
 }
 
 async function init() {
   bindEvents();
-  renderState(await shell?.getState?.());
-  refreshAutostartInfo();
+  const [state, version] = await Promise.all([
+    shell?.getState?.(),
+    shell?.getVersion?.()
+  ]);
+  renderState(state);
+  elements.currentVersion.textContent = `当前版本 v${version || '--'}`;
+  void refreshAutostartInfo();
 }
 
 init();

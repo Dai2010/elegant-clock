@@ -4,6 +4,8 @@ contextBridge.exposeInMainWorld('elegantClock', {
   getVersion: () => ipcRenderer.invoke('app:get-version'),
   getAboutInfo: () => ipcRenderer.invoke('app:get-about-info'),
   getUpdateInfo: () => ipcRenderer.invoke('app:get-update-info'),
+  checkForUpdates: () => ipcRenderer.invoke('app:check-for-updates'),
+  startDirectUpdate: () => ipcRenderer.invoke('app:start-direct-update'),
   startProxyUpdate: () => ipcRenderer.invoke('app:start-proxy-update'),
   openAbout: () => ipcRenderer.invoke('app:open-about'),
   openSettings: () => ipcRenderer.invoke('app:open-settings'),

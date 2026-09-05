@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const {
   compareVersions,
   createUpdateInfo,
+  getDirectDownloadUrl,
   getProxyDownloadUrl,
   selectUpdateAsset
 } = require('../src/update-checker');
@@ -67,6 +68,8 @@ test('selects the platform package and requires a GitHub digest', () => {
 
 test('builds proxy URLs only from trusted project release assets', () => {
   const assetUrl = 'https://github.com/Dai2010/elegant-clock/releases/download/v1.2.0/update.exe';
+  assert.equal(getDirectDownloadUrl(assetUrl), assetUrl);
   assert.equal(getProxyDownloadUrl(assetUrl), `https://ghfast.top/${assetUrl}`);
+  assert.throws(() => getDirectDownloadUrl('https://example.com/update.exe'));
   assert.throws(() => getProxyDownloadUrl('https://example.com/update.exe'));
 });

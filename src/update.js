@@ -12,6 +12,7 @@ const elements = {
   downloadProgress: document.querySelector('#download-progress'),
   laterButton: document.querySelector('#later-button'),
   releaseButton: document.querySelector('#release-button'),
+  directUpdateButton: document.querySelector('#direct-update-button'),
   proxyUpdateButton: document.querySelector('#proxy-update-button')
 };
 
@@ -45,6 +46,8 @@ function renderUpdateInfo(info) {
   elements.publishedAt.textContent = publishedAt;
 
   if (!info.asset) {
+    elements.directUpdateButton.disabled = true;
+    elements.directUpdateButton.title = '当前平台没有可校验的安装包，请前往发布页下载';
     elements.proxyUpdateButton.disabled = true;
     elements.proxyUpdateButton.title = '当前平台没有可校验的安装包，请前往发布页下载';
   }
@@ -73,28 +76,36 @@ function showProgress(progress = {}) {
 
 function setUpdating(enabled) {
   updateInProgress = enabled;
+  elements.directUpdateButton.disabled = enabled || !updateInfo?.asset;
   elements.proxyUpdateButton.disabled = enabled || !updateInfo?.asset;
   elements.releaseButton.disabled = enabled;
   elements.laterButton.textContent = enabled ? '取消下载' : '稍后再说';
 }
 
-async function startProxyUpdate() {
+async function startUpdate(source) {
   if (updateInProgress || !updateInfo?.asset) {
     return;
   }
 
   setUpdating(true);
-  showProgress({ phase: 'connecting', message: '正在连接代理…' });
+  showProgress({
+    phase: 'connecting',
+    message: source === 'proxy' ? '正在连接 ghfast.top…' : '正在连接 GitHub…'
+  });
 
   try {
-    const result = await shell?.startProxyUpdate?.();
+    const result = source === 'proxy'
+      ? await shell?.startProxyUpdate?.()
+      : await shell?.startDirectUpdate?.();
     if (!result?.ok) {
-      throw new Error(result?.error || '代理更新失败，请前往发布页手动下载。');
+      throw new Error(result?.error || (source === 'proxy'
+        ? '代理更新失败，请前往发布页手动下载。'
+        : '原地址更新失败，可尝试代理更新。'));
     }
   } catch (error) {
     showProgress({
       phase: 'error',
-      message: error?.message || '代理更新失败，请前往发布页手动下载。'
+      message: error?.message || '更新失败，请重试或查看发布页。'
     });
     setUpdating(false);
   }
@@ -124,7 +135,8 @@ async function init() {
   elements.releaseButton.addEventListener('click', () => {
     shell?.openExternal?.(updateInfo.releaseUrl)?.catch?.(() => {});
   });
-  elements.proxyUpdateButton.addEventListener('click', startProxyUpdate);
+  elements.directUpdateButton.addEventListener('click', () => startUpdate('direct'));
+  elements.proxyUpdateButton.addEventListener('click', () => startUpdate('proxy'));
   window.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') {
       closeWindow();

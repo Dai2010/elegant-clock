@@ -286,7 +286,7 @@ async function fetchLatestRelease(fetchImplementation, signal) {
   return response.json();
 }
 
-function getProxyDownloadUrl(downloadUrl) {
+function getDirectDownloadUrl(downloadUrl) {
   const trustedUrl = normalizeAsset({
     name: 'update.exe',
     browser_download_url: downloadUrl,
@@ -298,13 +298,18 @@ function getProxyDownloadUrl(downloadUrl) {
     throw new Error('Invalid GitHub release asset URL');
   }
 
-  return `${proxyBaseUrl}${trustedUrl}`;
+  return trustedUrl;
+}
+
+function getProxyDownloadUrl(downloadUrl) {
+  return `${proxyBaseUrl}${getDirectDownloadUrl(downloadUrl)}`;
 }
 
 module.exports = {
   compareVersions,
   createUpdateInfo,
   fetchLatestRelease,
+  getDirectDownloadUrl,
   getProxyDownloadUrl,
   selectUpdateAsset
 };

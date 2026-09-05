@@ -20,7 +20,12 @@ const { Readable, Transform } = require('stream');
 const { pipeline } = require('stream/promises');
 const { pathToFileURL } = require('url');
 const packageInfo = require('../package.json');
-const { createUpdateInfo, fetchLatestRelease, getProxyDownloadUrl } = require('./update-checker');
+const {
+  createUpdateInfo,
+  fetchLatestRelease,
+  getDirectDownloadUrl,
+  getProxyDownloadUrl
+} = require('./update-checker');
 
 let mainWindow;
 let aboutWindow;
@@ -34,6 +39,7 @@ let stateSaveTimer;
 let timerEngine;
 let latestUpdateInfo;
 let updateCheckStarted = false;
+let updateCheckPromise;
 let updateDownloadPromise;
 let updateDownloadAbortController;
 let watchdogProcess;
@@ -1014,17 +1020,16 @@ function sendUpdateProgress(progress) {
   }
 }
 
-async function checkForUpdatesOnLaunch() {
-  if (updateCheckStarted) {
-    return;
+async function performUpdateCheck() {
+  if (updateCheckPromise) {
+    return updateCheckPromise;
   }
 
-  updateCheckStarted = true;
   const abortController = new AbortController();
   const timeout = setTimeout(() => abortController.abort(), updateCheckTimeoutMs);
   timeout.unref?.();
 
-  try {
+  const operation = (async () => {
     const release = await fetchLatestRelease((...args) => net.fetch(...args), abortController.signal);
     latestUpdateInfo = createUpdateInfo(
       release,
@@ -1034,13 +1039,38 @@ async function checkForUpdatesOnLaunch() {
       getLinuxDistributionIds()
     );
 
-    if (latestUpdateInfo && !isQuitting) {
+    return {
+      status: latestUpdateInfo ? 'update-available' : 'up-to-date',
+      currentVersion: app.getVersion(),
+      latestVersion: latestUpdateInfo?.latestVersion || app.getVersion()
+    };
+  })();
+  updateCheckPromise = operation;
+
+  try {
+    return await operation;
+  } finally {
+    clearTimeout(timeout);
+    if (updateCheckPromise === operation) {
+      updateCheckPromise = undefined;
+    }
+  }
+}
+
+async function checkForUpdatesOnLaunch() {
+  if (updateCheckStarted) {
+    return;
+  }
+
+  updateCheckStarted = true;
+
+  try {
+    const result = await performUpdateCheck();
+    if (result.status === 'update-available' && !isQuitting) {
       createUpdateWindow();
     }
   } catch {
     // Update checks must not delay or interrupt normal startup.
-  } finally {
-    clearTimeout(timeout);
   }
 }
 
@@ -1101,17 +1131,22 @@ async function launchDownloadedUpdate(downloadPath) {
   quitTimer.unref?.();
 }
 
-async function downloadAndLaunchUpdate(asset, signal) {
+async function downloadAndLaunchUpdate(asset, source, signal) {
   const downloadDirectory = await fsPromises.mkdtemp(path.join(app.getPath('temp'), 'elegant-clock-update-'));
   const downloadPath = path.join(downloadDirectory, asset.name);
+  const usesProxy = source === 'proxy';
+  const sourceName = usesProxy ? 'ghfast.top' : 'GitHub';
+  const downloadUrl = usesProxy
+    ? getProxyDownloadUrl(asset.downloadUrl)
+    : getDirectDownloadUrl(asset.downloadUrl);
 
   try {
     sendUpdateProgress({
       phase: 'connecting',
-      message: '正在连接 ghfast.top…'
+      message: `正在连接 ${sourceName}…`
     });
 
-    const response = await net.fetch(getProxyDownloadUrl(asset.downloadUrl), {
+    const response = await net.fetch(downloadUrl, {
       method: 'GET',
       cache: 'no-store',
       redirect: 'follow',
@@ -1119,7 +1154,7 @@ async function downloadAndLaunchUpdate(asset, signal) {
     });
 
     if (!response.ok || !response.body) {
-      throw new Error(`代理下载失败（HTTP ${response.status}）`);
+      throw new Error(`${usesProxy ? '代理' : '原地址'}下载失败（HTTP ${response.status}）`);
     }
 
     sendUpdateProgress({
@@ -1164,7 +1199,7 @@ async function downloadAndLaunchUpdate(asset, signal) {
   }
 }
 
-async function startProxyUpdate() {
+async function startUpdate(source) {
   if (updateDownloadPromise) {
     return {
       ok: false,
@@ -1182,7 +1217,7 @@ async function startProxyUpdate() {
 
   const abortController = new AbortController();
   updateDownloadAbortController = abortController;
-  const operation = downloadAndLaunchUpdate(asset, abortController.signal);
+  const operation = downloadAndLaunchUpdate(asset, source, abortController.signal);
   updateDownloadPromise = operation;
 
   try {
@@ -1191,7 +1226,9 @@ async function startProxyUpdate() {
   } catch (error) {
     const message = abortController.signal.aborted
       ? '下载已取消'
-      : error?.message || '代理更新失败，请前往发布页手动下载';
+      : error?.message || (source === 'proxy'
+        ? '代理更新失败，请前往发布页手动下载'
+        : '原地址更新失败，可尝试代理更新');
     sendUpdateProgress({ phase: 'error', message });
     return { ok: false, error: message };
   } finally {
@@ -1982,6 +2019,40 @@ ipcMain.handle('app:get-about-info', () => getAboutInfo());
 
 ipcMain.handle('app:get-update-info', () => latestUpdateInfo ? clone(latestUpdateInfo) : null);
 
+ipcMain.handle('app:check-for-updates', async (event) => {
+  if (getWindowFromEvent(event) !== settingsWindow) {
+    return {
+      ok: false,
+      error: '只能从设置窗口检查更新'
+    };
+  }
+
+  try {
+    const result = await performUpdateCheck();
+    if (result.status === 'update-available' && !isQuitting) {
+      createUpdateWindow();
+    }
+
+    return { ok: true, ...result };
+  } catch {
+    return {
+      ok: false,
+      error: '检查更新失败，请检查网络连接后重试'
+    };
+  }
+});
+
+ipcMain.handle('app:start-direct-update', (event) => {
+  if (getWindowFromEvent(event) !== updateWindow) {
+    return {
+      ok: false,
+      error: '原地址更新只能从版本提示窗口启动'
+    };
+  }
+
+  return startUpdate('direct');
+});
+
 ipcMain.handle('app:start-proxy-update', (event) => {
   if (getWindowFromEvent(event) !== updateWindow) {
     return {
@@ -1990,7 +2061,7 @@ ipcMain.handle('app:start-proxy-update', (event) => {
     };
   }
 
-  return startProxyUpdate();
+  return startUpdate('proxy');
 });
 
 ipcMain.handle('app:open-about', () => {
